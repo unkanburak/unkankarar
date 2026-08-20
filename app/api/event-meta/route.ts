@@ -8,6 +8,8 @@ export const dynamic = "force-dynamic";
 const REACTIONS = ["HAHA", "İYİ SEÇİM", "GEÇMİŞ OLSUN", "BEN VARIM"] as const;
 type Reaction = typeof REACTIONS[number];
 type EventShape = { id?: string; phase?: string; joined?: string[] };
+const DEMO_REACTION_COOLDOWN_MS = 900;
+const demoReactionLastWrite = new Map<string, number>();
 
 async function getCurrentEventRecord() {
   const client = getSupabaseAdmin();
@@ -67,6 +69,9 @@ export async function POST(request: Request) {
         const { error } = await client.from("event_acknowledgements").upsert({ event_id: dbId, member_id: member.id }, { onConflict: "event_id,member_id" });
         if (error) throw new Error(`Görüldü durumu yazılamadı: ${error.message}`);
       } else if (body?.action === "react") {
+        const existing = await client.from("event_reactions").select("updated_at").eq("event_id", dbId).eq("member_id", member.id).maybeSingle();
+        if (existing.error) throw new Error(`Tepki zamanı okunamadı: ${existing.error.message}`);
+        if (existing.data?.updated_at && Date.now() - new Date(existing.data.updated_at).getTime() < DEMO_REACTION_COOLDOWN_MS) return NextResponse.json({ error: "Biraz yavaş 🙂" }, { status: 429 });
         const { error } = await client.from("event_reactions").upsert({ event_id: dbId, member_id: member.id, reaction: body.reaction, updated_at: new Date().toISOString() }, { onConflict: "event_id,member_id" });
         if (error) throw new Error(`Tepki yazılamadı: ${error.message}`);
       }
@@ -79,7 +84,13 @@ export async function POST(request: Request) {
 
     const meta = getDemoEventMeta(event.id);
     if (body?.action === "acknowledge" && !meta.acknowledged.includes(member.id)) meta.acknowledged.push(member.id);
-    if (body?.action === "react") meta.reactions[member.id] = body.reaction as Reaction;
+    if (body?.action === "react") {
+      const cooldownKey = `${event.id}:${member.id}`;
+      const lastWrite = demoReactionLastWrite.get(cooldownKey) ?? 0;
+      if (Date.now() - lastWrite < DEMO_REACTION_COOLDOWN_MS) return NextResponse.json({ error: "Biraz yavaş 🙂" }, { status: 429 });
+      demoReactionLastWrite.set(cooldownKey, Date.now());
+      meta.reactions[member.id] = body.reaction as Reaction;
+    }
     return responseMeta(setDemoEventMeta(event.id, meta));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Event bilgileri kaydedilemedi." }, { status: 500 });

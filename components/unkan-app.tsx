@@ -1037,7 +1037,32 @@ function NoDecisionStage({ member, failedRound, onRetry, onBack }: { member: Mem
 }
 
 function ReactionBar({ meta, onReact }: { meta: EventMeta; onReact: (reaction: string) => void }) {
-  return <div className="reaction-bar"><span className="eyebrow">MASA TEPKİSİ</span><div className="reaction-list">{REACTION_OPTIONS.map((reaction) => <button key={reaction} aria-label={reaction} title={reaction} className={`reaction-button ${Object.values(meta.reactions).filter((item) => item === reaction).length ? "has-reaction" : ""}`} onClick={() => onReact(reaction)}><span className="reaction-emoji">{REACTION_EMOJIS[reaction]}</span><small>{Object.values(meta.reactions).filter((item) => item === reaction).length || ""}</small></button>)}</div></div>;
+  const [bubbles, setBubbles] = useState<Array<{ id: string; memberId: string; reaction: string }>>([]);
+  const [cooldown, setCooldown] = useState(false);
+  const previousReactions = useRef<Record<string, string> | null>(null);
+
+  useEffect(() => {
+    const previous = previousReactions.current;
+    previousReactions.current = meta.reactions;
+    if (!previous) return;
+    const changed = Object.entries(meta.reactions).filter(([memberId, reaction]) => previous[memberId] !== reaction);
+    if (!changed.length) return;
+    const additions = changed.map(([memberId, reaction]) => ({ id: `${memberId}-${reaction}-${Date.now()}-${Math.random()}`, memberId, reaction }));
+    setBubbles((current) => [...current, ...additions].slice(-6));
+    additions.forEach((bubble) => window.setTimeout(() => setBubbles((current) => current.filter((item) => item.id !== bubble.id)), 2800));
+  }, [meta.reactions]);
+
+  function handleReact(reaction: string) {
+    if (cooldown) return;
+    setCooldown(true);
+    onReact(reaction);
+    window.setTimeout(() => setCooldown(false), 900);
+  }
+
+  return <>
+    <div className="reaction-bubbles" aria-live="polite"><AnimatePresence>{bubbles.map((bubble) => <motion.div key={bubble.id} className="reaction-bubble" initial={{ opacity: 0, x: 42, y: 24, scale: .72 }} animate={{ opacity: 1, x: 0, y: 0, scale: 1 }} exit={{ opacity: 0, x: 12, y: -34, scale: .84 }} transition={{ duration: .45, ease: "easeOut" }}><span className="reaction-bubble-emoji">{REACTION_EMOJIS[bubble.reaction]}</span><strong>{MEMBERS.find((person) => person.id === bubble.memberId)?.name ?? "Birisi"}</strong></motion.div>)}</AnimatePresence></div>
+    <div className="reaction-bar"><span className="eyebrow">MASA TEPKİSİ</span><div className="reaction-list">{REACTION_OPTIONS.map((reaction) => <button key={reaction} aria-label={reaction} title={reaction} disabled={cooldown} className={`reaction-button ${Object.values(meta.reactions).filter((item) => item === reaction).length ? "has-reaction" : ""}`} onClick={() => handleReact(reaction)}><span className="reaction-emoji">{REACTION_EMOJIS[reaction]}</span><small>{Object.values(meta.reactions).filter((item) => item === reaction).length || ""}</small></button>)}</div></div>
+  </>;
 }
 
 function OrganizerStage({ event, member, soundEnabled, meta, onReact, onSubmit }: { event: EventData; member: Member; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void; onSubmit: (detail: string) => void }) {

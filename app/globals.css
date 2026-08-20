@@ -392,6 +392,10 @@ button:disabled { cursor: not-allowed; }
 .reaction-button:hover, .reaction-button.has-reaction { color: var(--acid); border-color: rgba(198,243,107,.65); background: rgba(198,243,107,.07); }
 .reaction-button small { color: var(--acid); font-family: 'DM Mono', monospace; }
 .reaction-emoji { font-size: 21px; line-height: 1; }
+.reaction-bubbles { position: fixed; z-index: 30; right: 18px; bottom: 22px; display: grid; justify-items: end; gap: 8px; pointer-events: none; }
+.reaction-bubble { display: inline-flex; align-items: center; gap: 8px; padding: 9px 13px 9px 10px; border: 1px solid rgba(198,243,107,.38); border-radius: 999px; background: rgba(20,25,20,.94); box-shadow: 0 12px 28px rgba(0,0,0,.3), 0 0 22px rgba(198,243,107,.08); color: var(--warm); backdrop-filter: blur(10px); }
+.reaction-bubble-emoji { font-size: 24px; line-height: 1; }
+.reaction-bubble strong { font-size: 12px; letter-spacing: .02em; }
 .next-step-card { margin: 4px 0 22px; padding: 14px 16px; display: grid; gap: 5px; border-left: 2px solid var(--acid); background: rgba(198,243,107,.055); }
 .next-step-card strong { color: var(--ink); font-size: 14px; }
 .decision-receipt { width: min(380px, 100%); margin: 25px 0 0; padding: 18px 16px; display: grid; gap: 7px; border: 1px dashed rgba(198,243,107,.5); background: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 4px), rgba(0,0,0,.18); font-family: 'DM Mono', monospace; }
@@ -484,6 +488,8 @@ button:disabled { cursor: not-allowed; }
   .prompt-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reaction-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .reaction-button { justify-content: center; min-width: 0; }
+  .reaction-bubbles { right: 12px; bottom: 14px; gap: 6px; }
+  .reaction-bubble { padding: 8px 11px 8px 9px; }
   .acknowledgement { align-items: stretch; flex-direction: column; }
   .acknowledgement .button { width: 100%; }
   .ack-list { gap: 5px; }
