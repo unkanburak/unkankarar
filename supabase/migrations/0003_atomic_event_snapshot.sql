@@ -16,6 +16,8 @@ declare
   existing_id uuid;
   existing_state jsonb;
   merged jsonb;
+  existing_rank integer;
+  incoming_rank integer;
 begin
   select id, client_state
     into existing_id, existing_state
@@ -23,6 +25,33 @@ begin
    where group_id = p_group_id
      and client_key = p_client_key
    for update;
+
+  if existing_state is not null then
+    existing_rank := case (existing_state ->> 'phase')
+      when 'lobby' then 1 when 'ideas' then 2 when 'voting' then 3
+      when 'result' then 4 when 'dayRound' then 5 when 'dayResult' then 6
+      when 'timeRound' then 7 when 'timeVoting' then 8 when 'timeResult' then 9
+      when 'placeIdeas' then 10 when 'placeVoting' then 11 when 'placeResult' then 12
+      when 'organizer' then 13 when 'final' then 14 when 'noDecision' then 15
+      when 'cancelled' then 99 else 0 end;
+    incoming_rank := case (p_incoming ->> 'phase')
+      when 'lobby' then 1 when 'ideas' then 2 when 'voting' then 3
+      when 'result' then 4 when 'dayRound' then 5 when 'dayResult' then 6
+      when 'timeRound' then 7 when 'timeVoting' then 8 when 'timeResult' then 9
+      when 'placeIdeas' then 10 when 'placeVoting' then 11 when 'placeResult' then 12
+      when 'organizer' then 13 when 'final' then 14 when 'noDecision' then 15
+      when 'cancelled' then 99 else 0 end;
+
+    -- A lock is immutable. Cancellation remains an explicit admin action.
+    if (existing_state ->> 'phase') = 'final' and (p_incoming ->> 'phase') = 'final' then
+      return existing_state;
+    end if;
+    if (existing_state ->> 'phase') <> 'noDecision'
+       and (p_incoming ->> 'phase') <> 'cancelled'
+       and existing_rank > incoming_rank then
+      return existing_state;
+    end if;
+  end if;
 
   merged := coalesce(existing_state, '{}'::jsonb) || p_incoming;
 
