@@ -147,6 +147,9 @@ function mergeConcurrentEvent(previous: EventPayload | null, incoming: EventPayl
   }
   if (previous.phase !== incoming.phase) return incoming;
   const merged: EventPayload = { ...incoming, joined: [...new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])])] };
+  merged.organizerId = incoming.organizerId ?? previous.organizerId;
+  merged.organizerMessage = incoming.organizerMessage ?? previous.organizerMessage;
+  merged.organizerDetail = incoming.organizerDetail ?? previous.organizerDetail;
   if (incoming.phase === "ideas") merged.ideas = mergeIdeas(previous.ideas, incoming.ideas);
   if (incoming.phase === "placeIdeas") merged.placeIdeas = mergeIdeas(previous.placeIdeas, incoming.placeIdeas);
   if (incoming.phase === "voting" && previous.voteRound === incoming.voteRound) merged.votes = { ...(previous.votes ?? {}), ...(incoming.votes ?? {}) };
