@@ -165,6 +165,40 @@ function mergeConcurrentEvent(previous: EventPayload | null, incoming: EventPayl
       updatedAt: Math.max(previous.updatedAt ?? 0, incoming.updatedAt ?? 0, Date.now()),
     };
   }
+  if (previous.phase === "voting" && incoming.phase === "result") {
+    return {
+      ...incoming,
+      joined: [...new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])])],
+      votes: { ...(previous.votes ?? {}), ...(incoming.votes ?? {}) },
+      organizerId: incoming.organizerId ?? previous.organizerId,
+      organizerMessage: incoming.organizerMessage ?? previous.organizerMessage,
+      updatedAt: Math.max(previous.updatedAt ?? 0, incoming.updatedAt ?? 0, Date.now()),
+    };
+  }
+  if (previous.phase === "placeVoting" && incoming.phase === "placeResult") {
+    return {
+      ...incoming,
+      joined: [...new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])])],
+      placeVotes: { ...(previous.placeVotes ?? {}), ...(incoming.placeVotes ?? {}) },
+      placeIdeas: mergeIdeas(previous.placeIdeas, incoming.placeIdeas),
+      updatedAt: Math.max(previous.updatedAt ?? 0, incoming.updatedAt ?? 0, Date.now()),
+    };
+  }
+  if (previous.phase === "timeVoting" && incoming.phase === "timeResult") {
+    const oldSchedule = previous.schedule ?? {};
+    const newSchedule = incoming.schedule ?? {};
+    return {
+      ...incoming,
+      joined: [...new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])])],
+      schedule: {
+        ...oldSchedule,
+        ...newSchedule,
+        time: { ...(oldSchedule.time ?? {}), ...(newSchedule.time ?? {}) },
+        timeVotes: { ...(oldSchedule.timeVotes ?? {}), ...(newSchedule.timeVotes ?? {}) },
+      },
+      updatedAt: Math.max(previous.updatedAt ?? 0, incoming.updatedAt ?? 0, Date.now()),
+    };
+  }
   if (previous.phase !== incoming.phase) return incoming;
   const merged: EventPayload = { ...incoming, joined: [...new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])])] };
   merged.organizerId = incoming.organizerId ?? previous.organizerId;
@@ -187,6 +221,25 @@ function mergeConcurrentEvent(previous: EventPayload | null, incoming: EventPayl
   }
   merged.updatedAt = Math.max(previous.updatedAt ?? 0, incoming.updatedAt ?? 0, Date.now());
   return merged;
+}
+
+function keepTransitionSafe(previous: EventPayload | null, incoming: EventPayload, actorRole: string) {
+  if (!previous || previous.id !== incoming.id) return incoming;
+  const joinedCount = new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])]).size;
+  const participants = incoming.participants?.length ? incoming.participants : (previous.participants?.length ? previous.participants : previous.joined ?? []);
+  const count = (values: Record<string, unknown> | undefined) => Object.keys(values ?? {}).length;
+  const stay = () => ({ ...incoming, phase: previous.phase, roundEndsAt: previous.roundEndsAt });
+
+  if (previous.phase === "voting" && incoming.phase === "result") {
+    const votes = incoming.votes ?? {};
+    const quorum = Math.floor(Math.max(1, joinedCount) / 2) + 1;
+    if (count(votes) < quorum || (actorRole !== "ADMIN" && count(votes) < joinedCount)) return stay();
+  }
+  if (previous.phase === "placeVoting" && incoming.phase === "placeResult" && count(incoming.placeVotes) < participants.length) return stay();
+  if (previous.phase === "dayRound" && incoming.phase === "dayResult" && count(incoming.schedule?.availability) < joinedCount) return stay();
+  if (previous.phase === "timeRound" && incoming.phase === "timeVoting" && count(incoming.schedule?.time) < joinedCount) return stay();
+  if (previous.phase === "timeVoting" && incoming.phase === "timeResult" && count(incoming.schedule?.timeVotes) < joinedCount) return stay();
+  return incoming;
 }
 
 const phaseRank: Record<string, number> = {
@@ -262,7 +315,7 @@ export async function POST(request: Request) {
     if (!eligibleIds.includes(event.organizerId)) return NextResponse.json({ error: "Organizatör yalnızca gerçek katılımcılar arasından seçilebilir." }, { status: 400 });
   }
   try {
-    const mergedEvent = mergeConcurrentEvent(previousEvent, event);
+    const mergedEvent = keepTransitionSafe(previousEvent, mergeConcurrentEvent(previousEvent, event), member.role);
     const persistedEvent = await persistEvent(mergedEvent, member.id);
     return NextResponse.json({ event: persistedEvent });
   } catch (error) {
