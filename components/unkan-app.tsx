@@ -521,6 +521,20 @@ export default function UnkanApp() {
     window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(savedEvent));
     const send = async () => {
       let lastError = "State kaydedilemedi.";
+      const reconcile = async () => {
+        if (localRevisionRef.current !== savedEvent.updatedAt) return;
+        try {
+          const response = await fetch("/api/state", { credentials: "include", cache: "no-store" });
+          const data = await response.json() as { event?: EventData | null };
+          if (!data.event) return;
+          localRevisionRef.current = Math.max(localRevisionRef.current, data.event.updatedAt ?? 0);
+          setEvent(data.event);
+          setPhase(data.event.phase);
+          window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(data.event));
+        } catch {
+          // Keep the optimistic state when the browser is offline.
+        }
+      };
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           const response = await fetch("/api/state", {
@@ -530,7 +544,11 @@ export default function UnkanApp() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ event: savedEvent }),
           });
-          if (response.ok || response.status === 409) return;
+          if (response.ok) return;
+          if (response.status === 409) {
+            await reconcile();
+            return;
+          }
           const data = await response.json().catch(() => ({})) as { error?: string };
           lastError = data.error ?? lastError;
         } catch {
@@ -538,6 +556,7 @@ export default function UnkanApp() {
         }
         await new Promise<void>((resolve) => window.setTimeout(resolve, 200 * (attempt + 1)));
       }
+      await reconcile();
       showToast(`${lastError} Tekrar dene.`);
     };
     writeQueueRef.current = writeQueueRef.current.then(send).catch(() => undefined);
