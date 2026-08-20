@@ -135,7 +135,17 @@ function mergeIdeas(previous: EventPayload["ideas"], incoming: EventPayload["ide
 }
 
 function mergeConcurrentEvent(previous: EventPayload | null, incoming: EventPayload) {
-  if (!previous || previous.id !== incoming.id || previous.phase !== incoming.phase) return incoming;
+  if (!previous || previous.id !== incoming.id) return incoming;
+  if (previous.phase === "organizer" && incoming.phase === "final") {
+    return {
+      ...incoming,
+      organizerId: incoming.organizerId ?? previous.organizerId,
+      organizerMessage: incoming.organizerMessage ?? previous.organizerMessage,
+      organizerDetail: incoming.organizerDetail ?? previous.organizerDetail,
+      updatedAt: Math.max(previous.updatedAt ?? 0, incoming.updatedAt ?? 0, Date.now()),
+    };
+  }
+  if (previous.phase !== incoming.phase) return incoming;
   const merged: EventPayload = { ...incoming, joined: [...new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])])] };
   if (incoming.phase === "ideas") merged.ideas = mergeIdeas(previous.ideas, incoming.ideas);
   if (incoming.phase === "placeIdeas") merged.placeIdeas = mergeIdeas(previous.placeIdeas, incoming.placeIdeas);
