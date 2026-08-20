@@ -51,6 +51,7 @@ type EventData = {
   lockedAt?: string;
   cancelledAt?: string;
   cancelledBy?: string;
+  updatedAt?: number;
 };
 
 const CURRENT_EVENT_KEY = "unkan-current-event-v3";
@@ -276,7 +277,10 @@ export default function UnkanApp() {
       fetch("/api/state").then((response) => response.json()).then((data: { event?: EventData | null; cancellation?: CancellationNotice | null }) => {
         if (data.event) {
           const parsed = data.event;
-          setEvent((current) => current && JSON.stringify(current) === JSON.stringify(parsed) ? current : parsed);
+          setEvent((current) => {
+            if (current?.id === parsed.id && current.updatedAt && (!parsed.updatedAt || parsed.updatedAt < current.updatedAt)) return current;
+            return current && JSON.stringify(current) === JSON.stringify(parsed) ? current : parsed;
+          });
           setPhase((current) => current === "home" || current === "create" ? current : (parsed.phase === "final" ? "final" : parsed.phase));
           window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(parsed));
           return;
@@ -305,9 +309,7 @@ export default function UnkanApp() {
     if (!hydrated || !member || !event || event.phase === "final" || event.phase === "cancelled") return;
     if (!event.joined.includes(member.id)) {
       const next = { ...event, joined: [...event.joined, member.id] };
-      setEvent(next);
-      window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(next));
-      void fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: next }) });
+      saveEvent(next);
     }
   }, [hydrated, member, event]);
 
@@ -508,10 +510,12 @@ export default function UnkanApp() {
   }, [event, member?.role, reducedMotion]);
 
   function saveEvent(next: EventData) {
-    setEvent(next);
-    setPhase(next.phase);
-    window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(next));
-    void fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: next }) });
+    const updatedAt = Math.max(Date.now(), event?.updatedAt ? event.updatedAt + 1 : 0);
+    const savedEvent = { ...next, updatedAt };
+    setEvent(savedEvent);
+    setPhase(savedEvent.phase);
+    window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(savedEvent));
+    void fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: savedEvent }) });
   }
 
   async function cancelTable() {

@@ -20,10 +20,19 @@ type EventPayload = {
   organizerDetail?: string;
   roundEndsAt?: number;
   lockedAt?: string;
+  updatedAt?: number;
   winnerId?: string;
   voteRound?: number;
   joined?: string[];
   participants?: string[];
+  votes?: Record<string, string[]>;
+  placeVotes?: Record<string, string>;
+  schedule?: {
+    availability?: Record<string, string[]>;
+    time?: Record<string, string>;
+    timeVotes?: Record<string, string>;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 };
 
@@ -119,6 +128,34 @@ function notice(cancelledAt = new Date().toISOString()) {
   return { id: `cancel_${cancelledAt}`, message: "Burak masayı bozdu.", cancelledAt };
 }
 
+function mergeIdeas(previous: EventPayload["ideas"], incoming: EventPayload["ideas"]) {
+  const merged = new Map((previous ?? []).map((idea) => [idea.id, idea]));
+  for (const idea of incoming ?? []) merged.set(idea.id, idea);
+  return [...merged.values()];
+}
+
+function mergeConcurrentEvent(previous: EventPayload | null, incoming: EventPayload) {
+  if (!previous || previous.id !== incoming.id || previous.phase !== incoming.phase) return incoming;
+  const merged: EventPayload = { ...incoming, joined: [...new Set([...(previous.joined ?? []), ...(incoming.joined ?? [])])] };
+  if (incoming.phase === "ideas") merged.ideas = mergeIdeas(previous.ideas, incoming.ideas);
+  if (incoming.phase === "placeIdeas") merged.placeIdeas = mergeIdeas(previous.placeIdeas, incoming.placeIdeas);
+  if (incoming.phase === "voting" && previous.voteRound === incoming.voteRound) merged.votes = { ...(previous.votes ?? {}), ...(incoming.votes ?? {}) };
+  if (incoming.phase === "placeVoting") merged.placeVotes = { ...(previous.placeVotes ?? {}), ...(incoming.placeVotes ?? {}) };
+  if (["dayRound", "timeRound", "timeVoting"].includes(incoming.phase ?? "")) {
+    const oldSchedule = previous.schedule ?? {};
+    const newSchedule = incoming.schedule ?? {};
+    merged.schedule = {
+      ...oldSchedule,
+      ...newSchedule,
+      availability: { ...(oldSchedule.availability ?? {}), ...(newSchedule.availability ?? {}) },
+      time: { ...(oldSchedule.time ?? {}), ...(newSchedule.time ?? {}) },
+      timeVotes: { ...(oldSchedule.timeVotes ?? {}), ...(newSchedule.timeVotes ?? {}) },
+    };
+  }
+  merged.updatedAt = Math.max(previous.updatedAt ?? 0, incoming.updatedAt ?? 0, Date.now());
+  return merged;
+}
+
 const phaseRank: Record<string, number> = {
   lobby: 1,
   ideas: 2,
@@ -187,8 +224,9 @@ export async function POST(request: Request) {
     if (!eligibleIds.includes(event.organizerId)) return NextResponse.json({ error: "Organizatör yalnızca gerçek katılımcılar arasından seçilebilir." }, { status: 400 });
   }
   try {
-    await persistEvent(event, member.id);
-    return NextResponse.json({ event });
+    const mergedEvent = mergeConcurrentEvent(previousEvent, event);
+    await persistEvent(mergedEvent, member.id);
+    return NextResponse.json({ event: mergedEvent });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Event kaydedilemedi." }, { status: 500 });
   }
