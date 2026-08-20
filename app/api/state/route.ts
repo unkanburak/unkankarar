@@ -115,8 +115,8 @@ function validateEvent(event: EventPayload | null) {
   return single(event.ideas, "Bir üye en fazla 1 fikir atabilir.") ?? single(event.placeIdeas, "Bir üye en fazla 1 mekân önerebilir.");
 }
 
-function notice() {
-  return { id: `cancel_${Date.now()}`, message: "Burak masayı bozdu.", cancelledAt: new Date().toISOString() };
+function notice(cancelledAt = new Date().toISOString()) {
+  return { id: `cancel_${cancelledAt}`, message: "Burak masayı bozdu.", cancelledAt };
 }
 
 const phaseRank: Record<string, number> = {
@@ -142,7 +142,7 @@ export async function GET() {
   try {
     const event = await currentEvent();
     if (event?.phase === "cancelled") {
-      const cancelled = notice();
+      const cancelled = notice(typeof event.cancelledAt === "string" ? event.cancelledAt : undefined);
       setDemoEvent(null);
       setCancellationNotice(cancelled);
       return NextResponse.json({ event: null, cancellation: cancelled }, { headers: { "Cache-Control": "no-store" } });
@@ -159,7 +159,7 @@ export async function DELETE() {
   const event = await currentEvent();
   if (!event) return NextResponse.json({ event: null });
   await persistEvent({ ...event, phase: "cancelled", cancelledAt: new Date().toISOString(), cancelledBy: member.id, roundEndsAt: undefined }, member.id);
-  const cancelled = notice();
+  const cancelled = notice(new Date().toISOString());
   setCancellationNotice(cancelled);
   return NextResponse.json({ event: null, cancellation: cancelled });
 }
