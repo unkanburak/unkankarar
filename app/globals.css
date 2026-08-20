@@ -391,6 +391,7 @@ button:disabled { cursor: not-allowed; }
 .reaction-button { min-height: 36px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; background: transparent; font-size: 11px; transition: .2s; }
 .reaction-button:hover, .reaction-button.has-reaction { color: var(--acid); border-color: rgba(198,243,107,.65); background: rgba(198,243,107,.07); }
 .reaction-button small { color: var(--acid); font-family: 'DM Mono', monospace; }
+.reaction-emoji { font-size: 21px; line-height: 1; }
 .next-step-card { margin: 4px 0 22px; padding: 14px 16px; display: grid; gap: 5px; border-left: 2px solid var(--acid); background: rgba(198,243,107,.055); }
 .next-step-card strong { color: var(--ink); font-size: 14px; }
 .decision-receipt { width: min(380px, 100%); margin: 25px 0 0; padding: 18px 16px; display: grid; gap: 7px; border: 1px dashed rgba(198,243,107,.5); background: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 4px), rgba(0,0,0,.18); font-family: 'DM Mono', monospace; }

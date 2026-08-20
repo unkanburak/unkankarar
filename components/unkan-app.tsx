@@ -60,6 +60,7 @@ const SOUND_SETTING_KEY = "unkan-sound-enabled";
 const MAX_IDEAS_PER_MEMBER = 1;
 const PROMPT_TEMPLATES = ["Bu gece ne yapıyoruz?", "Nerede buluşuyoruz?", "Ne izliyoruz?", "Ne oynuyoruz?", "Özel karar"];
 const REACTION_OPTIONS = ["HAHA", "İYİ SEÇİM", "GEÇMİŞ OLSUN", "BEN VARIM"];
+const REACTION_EMOJIS: Record<string, string> = { "HAHA": "😂", "İYİ SEÇİM": "👍", "GEÇMİŞ OLSUN": "😅", "BEN VARIM": "🙌" };
 
 const copyForCount = (count: number) => {
   if (count === 0) return "Masa boş. Kaos kimse olmadan kaos değil.";
@@ -1036,7 +1037,7 @@ function NoDecisionStage({ member, failedRound, onRetry, onBack }: { member: Mem
 }
 
 function ReactionBar({ meta, onReact }: { meta: EventMeta; onReact: (reaction: string) => void }) {
-  return <div className="reaction-bar"><span className="eyebrow">MASA TEPKİSİ</span><div className="reaction-list">{REACTION_OPTIONS.map((reaction) => <button key={reaction} className={`reaction-button ${Object.values(meta.reactions).filter((item) => item === reaction).length ? "has-reaction" : ""}`} onClick={() => onReact(reaction)}>{reaction}<small>{Object.values(meta.reactions).filter((item) => item === reaction).length || ""}</small></button>)}</div></div>;
+  return <div className="reaction-bar"><span className="eyebrow">MASA TEPKİSİ</span><div className="reaction-list">{REACTION_OPTIONS.map((reaction) => <button key={reaction} aria-label={reaction} title={reaction} className={`reaction-button ${Object.values(meta.reactions).filter((item) => item === reaction).length ? "has-reaction" : ""}`} onClick={() => onReact(reaction)}><span className="reaction-emoji">{REACTION_EMOJIS[reaction]}</span><small>{Object.values(meta.reactions).filter((item) => item === reaction).length || ""}</small></button>)}</div></div>;
 }
 
 function OrganizerStage({ event, member, soundEnabled, meta, onReact, onSubmit }: { event: EventData; member: Member; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void; onSubmit: (detail: string) => void }) {
