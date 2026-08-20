@@ -221,7 +221,12 @@ export async function POST(request: Request) {
   const event = body?.event ?? null;
   const validationError = validateEvent(event);
   if (!event || validationError) return NextResponse.json({ error: validationError ?? "Geçersiz event payload." }, { status: 400 });
-  const previousEvent = await currentEvent();
+  let previousEvent: EventPayload | null;
+  try {
+    previousEvent = await currentEvent();
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Mevcut masa okunamadı." }, { status: 503 });
+  }
   if (previousEvent?.id && previousEvent.id === event.id && previousEvent.phase === "final" && event.phase !== "final") return NextResponse.json({ error: "Kapanmış plan yeniden açılamaz." }, { status: 409 });
   if (previousEvent?.id && previousEvent.id === event.id && previousEvent.phase !== "noDecision" && phaseRank[previousEvent.phase ?? ""] > phaseRank[event.phase ?? ""]) return NextResponse.json({ error: "Eski bir ekran state'i geri alamaz." }, { status: 409 });
   if (previousEvent?.id && previousEvent.id === event.id && previousEvent.organizerDetail !== event.organizerDetail) {

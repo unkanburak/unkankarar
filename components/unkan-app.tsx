@@ -243,6 +243,8 @@ export default function UnkanApp() {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const seenCancellationId = useRef<string | null>(null);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const localRevisionRef = useRef(0);
   const reducedMotion = useReducedMotion();
 
   useEffect(() => {
@@ -277,6 +279,7 @@ export default function UnkanApp() {
       fetch("/api/state").then((response) => response.json()).then((data: { event?: EventData | null; cancellation?: CancellationNotice | null }) => {
         if (data.event) {
           const parsed = data.event;
+          if (parsed.updatedAt) localRevisionRef.current = Math.max(localRevisionRef.current, parsed.updatedAt);
           setEvent((current) => {
             if (current?.id === parsed.id && current.updatedAt && (!parsed.updatedAt || parsed.updatedAt < current.updatedAt)) return current;
             return current && JSON.stringify(current) === JSON.stringify(parsed) ? current : parsed;
@@ -510,12 +513,34 @@ export default function UnkanApp() {
   }, [event, member?.role, reducedMotion]);
 
   function saveEvent(next: EventData) {
-    const updatedAt = Math.max(Date.now(), event?.updatedAt ? event.updatedAt + 1 : 0);
+    const updatedAt = Math.max(Date.now(), localRevisionRef.current + 1, next.updatedAt ?? 0);
+    localRevisionRef.current = updatedAt;
     const savedEvent = { ...next, updatedAt };
     setEvent(savedEvent);
     setPhase(savedEvent.phase);
     window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(savedEvent));
-    void fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: savedEvent }) });
+    const send = async () => {
+      let lastError = "State kaydedilemedi.";
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const response = await fetch("/api/state", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ event: savedEvent }),
+          });
+          if (response.ok || response.status === 409) return;
+          const data = await response.json().catch(() => ({})) as { error?: string };
+          lastError = data.error ?? lastError;
+        } catch {
+          lastError = "Sunucuya bağlanılamadı.";
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 200 * (attempt + 1)));
+      }
+      showToast(`${lastError} Tekrar dene.`);
+    };
+    writeQueueRef.current = writeQueueRef.current.then(send).catch(() => undefined);
   }
 
   async function cancelTable() {
