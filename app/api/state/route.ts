@@ -66,16 +66,9 @@ async function persistRelations(client: NonNullable<ReturnType<typeof getSupabas
   }
 }
 
-async function persistEvent(event: EventPayload, memberId: string) {
-  const client = getSupabaseAdmin();
-  if (!client) {
-    setDemoEvent(event);
-    setCancellationNotice(null);
-    return;
-  }
-  const id = await groupId(client);
+async function persistEventLegacy(client: NonNullable<ReturnType<typeof getSupabaseAdmin>>, groupUuid: string, event: EventPayload, memberId: string) {
   const base = {
-    group_id: id,
+    group_id: groupUuid,
     prompt: event.prompt ?? "Bu gece ne yapıyoruz?",
     option_source: event.optionSource ?? "crowd",
     planning_mode: event.planningMode ?? "decision",
@@ -91,7 +84,7 @@ async function persistEvent(event: EventPayload, memberId: string) {
     locked_at: event.lockedAt ?? null,
     client_state: event,
   };
-  const existing = await client.from("events").select("id").eq("group_id", id).eq("client_key", event.id).maybeSingle();
+  const existing = await client.from("events").select("id").eq("group_id", groupUuid).eq("client_key", event.id).maybeSingle();
   if (existing.error) throw new Error(`Event aranamadı: ${existing.error.message}`);
   if (existing.data?.id) {
     const { error } = await client.from("events").update(base).eq("id", existing.data.id);
@@ -102,7 +95,34 @@ async function persistEvent(event: EventPayload, memberId: string) {
     if (error) throw new Error(`Event oluşturulamadı: ${error.message}`);
     await persistRelations(client, data.id, event);
   }
+  return event;
+}
+
+async function persistEvent(event: EventPayload, memberId: string) {
+  const client = getSupabaseAdmin();
+  if (!client) {
+    setDemoEvent(event);
+    setCancellationNotice(null);
+    return event;
+  }
+  const id = await groupId(client);
+  const { data: mergedState, error: mergeError } = await client.rpc("merge_event_snapshot", {
+    p_group_id: id,
+    p_client_key: event.id,
+    p_incoming: event,
+    p_actor_id: memberId,
+  });
+  if (mergeError) {
+    // Allows a zero-downtime rollout while 0003 is being applied in Supabase.
+    if (mergeError.code === "42883" || mergeError.code === "PGRST202") return persistEventLegacy(client, id, event, memberId);
+    throw new Error(`Event snapshot birleştirilemedi: ${mergeError.message}`);
+  }
+  const mergedEvent = (mergedState ?? event) as EventPayload;
+  const { data: persisted, error: persistedError } = await client.from("events").select("id").eq("group_id", id).eq("client_key", event.id).single();
+  if (persistedError) throw new Error(`Event kimliği okunamadı: ${persistedError.message}`);
+  await persistRelations(client, persisted.id, mergedEvent);
   setCancellationNotice(null);
+  return mergedEvent;
 }
 
 async function currentEvent() {
@@ -243,8 +263,8 @@ export async function POST(request: Request) {
   }
   try {
     const mergedEvent = mergeConcurrentEvent(previousEvent, event);
-    await persistEvent(mergedEvent, member.id);
-    return NextResponse.json({ event: mergedEvent });
+    const persistedEvent = await persistEvent(mergedEvent, member.id);
+    return NextResponse.json({ event: persistedEvent });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Event kaydedilemedi." }, { status: 500 });
   }

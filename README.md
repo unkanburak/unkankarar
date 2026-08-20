@@ -44,9 +44,10 @@ Alternatif olarak Supabase SQL Editor’da sırasıyla şu dosyaları çalışt�
 
 - `supabase/migrations/0001_initial.sql`
 - `supabase/migrations/0002_event_snapshot.sql`
+- `supabase/migrations/0003_atomic_event_snapshot.sql`
 - `supabase/seed.sql`
 
-Migration; sabit üyeler, invite session’ları, event joins, ideas, anonymous votes, availability, organizer history, decision history ve idea pool tablolarını oluşturur. `0002_event_snapshot.sql`, mevcut UI event akışını Vercel instance’ları arasında kalıcı tutan `client_state` alanını ekler. RLS açık tutulur; üretim yazmaları yalnızca server-side service role üzerinden yapılır.
+Migration; sabit üyeler, invite session’ları, event joins, ideas, anonymous votes, availability, organizer history, decision history ve idea pool tablolarını oluşturur. `0002_event_snapshot.sql`, mevcut UI event akışını Vercel instance’ları arasında kalıcı tutan `client_state` alanını ekler. `0003_atomic_event_snapshot.sql`, farklı tarayıcılardan aynı anda gelen tam snapshot yazmalarını satır kilidiyle birleştirir; böylece fikir ve oylar birbirini ezmez. RLS açık tutulur; üretim yazmaları yalnızca server-side service role üzerinden yapılır.
 
 ## Invite links
 
@@ -67,7 +68,7 @@ Seed tokenları:
 
 ## Vercel
 
-1. Supabase’te `0001_initial.sql`, `0002_event_snapshot.sql` ve `seed.sql` dosyalarını çalıştırın.
+1. Supabase’te `0001_initial.sql`, `0002_event_snapshot.sql`, `0003_atomic_event_snapshot.sql` ve `seed.sql` dosyalarını bu sırayla çalıştırın.
 2. Repository’yi Vercel’e import edin.
 3. Vercel Environment Variables’a `.env.local` içindeki değişkenleri ekleyin. `SUPABASE_SERVICE_ROLE_KEY` yalnızca server env olarak tanımlanmalı, `NEXT_PUBLIC_` ile başlamamalıdır.
 4. `MEMBER_SESSION_SECRET` için uzun ve rastgele bir değer kullanın.
