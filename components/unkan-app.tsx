@@ -544,7 +544,16 @@ export default function UnkanApp() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ event: savedEvent }),
           });
-          if (response.ok) return;
+          if (response.ok) {
+            const data = await response.json().catch(() => ({})) as { event?: EventData | null };
+            if (data.event && localRevisionRef.current === savedEvent.updatedAt && (data.event.updatedAt ?? 0) >= (savedEvent.updatedAt ?? 0)) {
+              localRevisionRef.current = data.event.updatedAt ?? localRevisionRef.current;
+              setEvent(data.event);
+              setPhase(data.event.phase);
+              window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(data.event));
+            }
+            return;
+          }
           if (response.status === 409) {
             await reconcile();
             return;
