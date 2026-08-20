@@ -129,6 +129,23 @@ async function currentEvent() {
   return hasSupabaseConfig() ? persistentEvent() : getDemoEvent() as EventPayload | null;
 }
 
+function normalizeIdeas(ideas: EventPayload["ideas"]) {
+  const byAuthor = new Map<string, NonNullable<EventPayload["ideas"]>[number]>();
+  for (const idea of ideas ?? []) {
+    if (idea.authorId && !byAuthor.has(idea.authorId)) byAuthor.set(idea.authorId, idea);
+  }
+  return [...byAuthor.values()];
+}
+
+function normalizeIncomingEvent(event: EventPayload): EventPayload {
+  return {
+    ...event,
+    joined: [...new Set(event.joined ?? [])],
+    ideas: normalizeIdeas(event.ideas),
+    placeIdeas: normalizeIdeas(event.placeIdeas),
+  };
+}
+
 function validateEvent(event: EventPayload | null) {
   if (!event || typeof event !== "object" || !event.id) return "Geçersiz event payload.";
   const single = (ideas: Array<{ authorId?: string }> | undefined, message: string) => {
@@ -291,7 +308,7 @@ export async function POST(request: Request) {
   const member = await getAuthenticatedMember();
   if (!member) return NextResponse.json({ error: "Oturum bulunamadı." }, { status: 401 });
   const body = await request.json().catch(() => null) as { event?: EventPayload } | null;
-  const event = body?.event ?? null;
+  const event = body?.event ? normalizeIncomingEvent(body.event) : null;
   const validationError = validateEvent(event);
   if (!event || validationError) return NextResponse.json({ error: validationError ?? "Geçersiz event payload." }, { status: 400 });
   let previousEvent: EventPayload | null;
