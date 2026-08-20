@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowUpRight, CalendarPlus, Check, ChevronLeft, CircleHelp, House, Instagram, MapPin, Send, Share2, Sparkles, Users, Volume2, VolumeX, X, Zap } from "lucide-react";
+import { ArrowUpRight, CalendarPlus, Check, ChevronLeft, CircleHelp, ClipboardCheck, House, Instagram, MapPin, MessageCircle, Send, Share2, Sparkles, Users, Volume2, VolumeX, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Member } from "@/lib/demo-data";
 import { MEMBERS } from "@/lib/demo-data";
@@ -13,6 +13,7 @@ type Phase = "home" | "create" | "lobby" | "ideas" | "voting" | "result" | "dayR
 type ResultStep = "opening" | "counting" | "eliminating" | "winner";
 type SoundEffect = "card" | "vote" | "eliminate" | "roulette" | "lock";
 type CancellationNotice = { id: string; message: string; cancelledAt: string };
+type EventMeta = { acknowledged: string[]; reactions: Record<string, string> };
 
 type Idea = { id: string; text: string; authorId: string };
 type Schedule = {
@@ -57,6 +58,8 @@ type EventData = {
 const CURRENT_EVENT_KEY = "unkan-current-event-v3";
 const SOUND_SETTING_KEY = "unkan-sound-enabled";
 const MAX_IDEAS_PER_MEMBER = 1;
+const PROMPT_TEMPLATES = ["Bu gece ne yapıyoruz?", "Nerede buluşuyoruz?", "Ne izliyoruz?", "Ne oynuyoruz?", "Özel karar"];
+const REACTION_OPTIONS = ["HAHA", "İYİ SEÇİM", "GEÇMİŞ OLSUN", "BEN VARIM"];
 
 const copyForCount = (count: number) => {
   if (count === 0) return "Masa boş. Kaos kimse olmadan kaos değil.";
@@ -65,6 +68,27 @@ const copyForCount = (count: number) => {
   if (count < 8) return "Bir kişi yüzünden demokrasi başlayamıyor.";
   return "TAM KADRO. Burak düğmeye bassın.";
 };
+
+function stageStatus(phase?: EventData["phase"]) {
+  const labels: Partial<Record<EventData["phase"], string>> = {
+    lobby: "Millet toplanıyor",
+    ideas: "Fikirler masaya düşüyor",
+    voting: "Oylar gizlice veriliyor",
+    result: "Alternatifler eleniyor",
+    dayRound: "Tarih havuzu açıldı",
+    dayResult: "Tarih masada kalıyor",
+    timeRound: "Saatler masaya geliyor",
+    timeVoting: "Saatler gizlice oylanıyor",
+    timeResult: "Saat belli oluyor",
+    placeIdeas: "Mekân fikirleri düşüyor",
+    placeVoting: "Mekânlar gizlice oylanıyor",
+    placeResult: "Mekân masada kaldı",
+    organizer: "Organizer seçiliyor",
+    final: "Plan başladı",
+    noDecision: "Masa yeni tur bekliyor",
+  };
+  return labels[phase ?? "lobby"] ?? "Karar masası";
+}
 
 const resultCopy = ["ELENDİ.", "BU GİTTİ.", "YOK.", "BURAYA KADAR."];
 const PLACE_VOTE_CATEGORIES = new Set(["Buluşma", "Yemek", "Aktivite"]);
@@ -242,6 +266,7 @@ export default function UnkanApp() {
   const [confirmExit, setConfirmExit] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [eventMeta, setEventMeta] = useState<EventMeta>({ acknowledged: [], reactions: {} });
   const seenCancellationId = useRef<string | null>(null);
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const localRevisionRef = useRef(0);
@@ -307,6 +332,18 @@ export default function UnkanApp() {
     const interval = window.setInterval(sync, 1000);
     return () => { window.removeEventListener("storage", sync); window.clearInterval(interval); };
   }, []);
+
+  useEffect(() => {
+    if (!member || !event || !["result", "organizer", "final"].includes(event.phase)) {
+      setEventMeta({ acknowledged: [], reactions: {} });
+      return;
+    }
+    let active = true;
+    const loadMeta = () => fetch("/api/event-meta", { credentials: "include", cache: "no-store" }).then((response) => response.ok ? response.json() : null).then((data: EventMeta | null) => { if (active && data) setEventMeta(data); }).catch(() => undefined);
+    void loadMeta();
+    const interval = window.setInterval(loadMeta, 1800);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [member?.id, event?.id, event?.phase]);
 
   useEffect(() => {
     if (!hydrated || !member || !event || event.phase === "final" || event.phase === "cancelled") return;
@@ -595,6 +632,19 @@ export default function UnkanApp() {
     window.setTimeout(() => setToast(null), 3000);
   }
 
+  async function updateEventMeta(action: "acknowledge" | "react", reaction?: string) {
+    try {
+      const response = await fetch("/api/event-meta", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, reaction }) });
+      const data = await response.json() as EventMeta & { error?: string };
+      if (!response.ok) return showToast(data.error ?? "Masa bilgisi güncellenemedi.");
+      setEventMeta({ acknowledged: data.acknowledged ?? [], reactions: data.reactions ?? {} });
+      if (action === "acknowledge") playUiSound("vote", soundEnabled);
+      else playUiSound("card", soundEnabled);
+    } catch {
+      showToast("Sunucuya bağlanılamadı.");
+    }
+  }
+
   function requestHome() {
     if (phase === "home") return;
     setConfirmExit(true);
@@ -625,6 +675,8 @@ export default function UnkanApp() {
           {member ? <div className="topbar-actions">{phase !== "home" ? <button className="home-link" onClick={requestHome}><House size={15} /> Ana sayfa</button> : null}{member.role === "ADMIN" && event && phase !== "home" && phase !== "create" && phase !== "cancelled" ? <button className="cancel-table-button" aria-label="Masayı dağıt" title="Masayı dağıt" onClick={() => setConfirmCancel(true)}><X size={14} /> Masayı dağıt</button> : null}<button className={`sound-toggle ${soundEnabled ? "active" : ""}`} onClick={toggleSound} aria-label={soundEnabled ? "Sesleri kapat" : "Sesleri aç"} title={soundEnabled ? "Sesler açık" : "Sesler kapalı"}>{soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}</button><div className="member-pill"><span className="member-dot" />{member.name}{member.role === "ADMIN" && <span className="admin-tag">ADMIN</span>}</div></div> : null}
         </header>
 
+        {member && event && phase !== "home" && phase !== "create" ? <div className="stage-status-pill"><span className="member-dot" />{stageStatus(event.phase)}</div> : null}
+
         {!member ? <Welcome /> : phase === "home" ? <Home member={member} event={event} onCreate={(isQuick) => { setQuickStart(isQuick); setPhase("create"); }} onOpen={() => setPhase(event ? event.phase : "home")} /> : null}
         {member && phase === "create" ? <CreateScreen member={member} quick={quickStart} onBack={requestHome} onCreate={(created) => { saveEvent(created); }} /> : null}
         {member && event && phase === "lobby" ? <Lobby event={event} member={member} onStart={() => {
@@ -647,17 +699,17 @@ export default function UnkanApp() {
           else if ((event.voteRound ?? 1) < 2) saveEvent(nextRound({ ...event, votes: {}, voteRound: 2 }, "voting"));
           else saveEvent({ ...event, phase: "noDecision", roundEndsAt: undefined });
         }} /> : null}
-        {member && event && phase === "result" && event.planningMode === "decision" ? <ResultStage event={event} reducedMotion={reducedMotion ?? false} soundEnabled={soundEnabled} /> : null}
+        {member && event && phase === "result" && event.planningMode === "decision" ? <ResultStage event={event} reducedMotion={reducedMotion ?? false} soundEnabled={soundEnabled} meta={eventMeta} onReact={(reaction) => void updateEventMeta("react", reaction)} /> : null}
         {member && event && phase === "dayRound" ? <DayRoundStage event={event} member={member} onSubmit={(days) => { playUiSound("vote", soundEnabled); saveEvent({ ...event, schedule: { ...(event.schedule ?? { availability: {}, time: {} }), availability: { ...(event.schedule?.availability ?? {}), [member.id]: days } } }); }} /> : null}
-        {member && event && phase === "dayResult" ? <SchedulePoolResult event={event} kind="day" /> : null}
+        {member && event && phase === "dayResult" ? <SchedulePoolResult event={event} kind="day" meta={eventMeta} onReact={(reaction) => void updateEventMeta("react", reaction)} /> : null}
         {member && event && phase === "timeRound" ? <TimeRoundStage event={event} member={member} onSubmit={(time) => { playUiSound("card", soundEnabled); saveEvent({ ...event, schedule: { ...(event.schedule ?? { availability: {}, time: {} }), time: { ...(event.schedule?.time ?? {}), [member.id]: time } } }); }} /> : null}
         {member && event && phase === "timeVoting" ? <TimeVotingStage event={event} member={member} onVote={(time) => { playUiSound("vote", soundEnabled); saveEvent({ ...event, schedule: { ...(event.schedule ?? { availability: {}, time: {} }), timeVotes: { ...(event.schedule?.timeVotes ?? {}), [member.id]: time } } }); }} /> : null}
-        {member && event && phase === "timeResult" ? <SchedulePoolResult event={event} kind="time" /> : null}
+        {member && event && phase === "timeResult" ? <SchedulePoolResult event={event} kind="time" meta={eventMeta} onReact={(reaction) => void updateEventMeta("react", reaction)} /> : null}
         {member && event && phase === "placeIdeas" ? <PlaceIdeasStage event={event} member={member} onSubmit={(text) => { playUiSound("card", soundEnabled); saveEvent({ ...event, placeIdeas: [...(event.placeIdeas ?? []), { id: randomId("place"), text, authorId: member.id }] }); }} /> : null}
         {member && event && phase === "placeVoting" ? <PlaceVotingStage event={event} member={member} onVote={(placeId) => { playUiSound("vote", soundEnabled); saveEvent({ ...event, placeVotes: { ...(event.placeVotes ?? {}), [member.id]: placeId } }); }} /> : null}
-        {member && event && phase === "placeResult" ? <PlaceResultStage event={event} soundEnabled={soundEnabled} /> : null}
-        {member && event && phase === "organizer" ? <OrganizerStage event={event} member={member} soundEnabled={soundEnabled} onSubmit={(detail) => saveEvent({ ...event, organizerDetail: detail.trim() })} /> : null}
-        {member && event && phase === "final" ? <FinalStage event={event} soundEnabled={soundEnabled} onBack={() => setPhase("home")} /> : null}
+        {member && event && phase === "placeResult" ? <PlaceResultStage event={event} soundEnabled={soundEnabled} meta={eventMeta} onReact={(reaction) => void updateEventMeta("react", reaction)} /> : null}
+        {member && event && phase === "organizer" ? <OrganizerStage event={event} member={member} soundEnabled={soundEnabled} meta={eventMeta} onReact={(reaction) => void updateEventMeta("react", reaction)} onSubmit={(detail) => saveEvent({ ...event, organizerDetail: detail.trim() })} /> : null}
+        {member && event && phase === "final" ? <FinalStage event={event} member={member} soundEnabled={soundEnabled} meta={eventMeta} onAcknowledge={() => void updateEventMeta("acknowledge")} onReact={(reaction) => void updateEventMeta("react", reaction)} onBack={() => setPhase("home")} /> : null}
         {member && event && phase === "cancelled" ? <CancelledStage member={member} onBack={() => setPhase("home")} onCreate={() => { setQuickStart(false); setPhase("create"); }} /> : null}
         {member && event && phase === "noDecision" ? <NoDecisionStage member={member} failedRound={event.failedRound} onRetry={() => {
           if (event.failedRound === "day") return saveEvent(nextRound({ ...event, failedRound: undefined, schedule: { ...(event.schedule ?? { availability: {}, time: {}, dayOptions: createDayOptions() }), availability: {}, selectedDay: undefined } }, "dayRound"));
@@ -831,11 +883,11 @@ function CreateScreen({ member, quick, onBack, onCreate }: { member: Member; qui
   const canContinue = step === 1 ? Boolean(prompt.trim()) : step === 5 ? options.length >= 2 : true;
 
   if (quick) {
-    return <section className="screen wizard-screen"><WizardHeader step={1} total={1} onBack={onBack} label="Hızlı karar · 3–5 dakika" /><div className="wizard-stage"><div className="eyebrow">Tek soru. Direkt masa.</div><h1 className="wizard-title">{title}</h1><input autoFocus className="wizard-input" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Bu gece ne yapıyoruz?" /><div className="quick-time-toggle"><button className={`button ghost ${planningMode === "schedule" ? "selected" : ""}`} onClick={() => setPlanningMode(planningMode === "schedule" ? "decision" : "schedule")}>{planningMode === "schedule" ? "GÜN & SAAT OYLAMASI AÇIK" : "+ GÜN & SAATİ OYLAYALIM"}</button>{planningMode === "schedule" ? <p className="small muted">Aktivite sonucu gizlenir; tarih oylanır, herkes saat önerir, sonra saat seçenekleri ayrıca oylanır.</p> : null}</div><button className="button primary wizard-cta" disabled={!prompt.trim()} onClick={create}><Users size={17} /> HIZLI MASAYI AÇ</button></div></section>;
+    return <section className="screen wizard-screen"><WizardHeader step={1} total={1} onBack={onBack} label="Hızlı karar · 3–5 dakika" /><div className="wizard-stage"><div className="eyebrow">Tek soru. Direkt masa.</div><h1 className="wizard-title">{title}</h1><input autoFocus className="wizard-input" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Bu gece ne yapıyoruz?" /><div className="prompt-templates">{PROMPT_TEMPLATES.map((item) => <button key={item} className={`prompt-chip ${prompt === item ? "selected" : ""}`} onClick={() => setPrompt(item)}>{item}</button>)}</div><div className="quick-time-toggle"><button className={`button ghost ${planningMode === "schedule" ? "selected" : ""}`} onClick={() => setPlanningMode(planningMode === "schedule" ? "decision" : "schedule")}>{planningMode === "schedule" ? "GÜN & SAAT OYLAMASI AÇIK" : "+ GÜN & SAATİ OYLAYALIM"}</button>{planningMode === "schedule" ? <p className="small muted">Aktivite sonucu gizlenir; tarih oylanır, herkes saat önerir, sonra saat seçenekleri ayrıca oylanır.</p> : null}</div><button className="button primary wizard-cta" disabled={!prompt.trim()} onClick={create}><Users size={17} /> HIZLI MASAYI AÇ</button></div></section>;
   }
 
   return <section className="screen wizard-screen"><WizardHeader step={step} total={totalSteps} onBack={() => step === 1 ? onBack() : setStep(step - 1)} label="Yeni karar masası" /><AnimatePresence mode="wait"><motion.div key={step} className="wizard-stage" initial={{ opacity: 0, x: 26 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: motionTokens.duration.card, ease: motionTokens.ease.standard }}><div className="eyebrow">{step} / {totalSteps}</div><h1 className="wizard-title">{title}</h1>
-    {step === 1 ? <input autoFocus className="wizard-input" value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && prompt.trim()) setStep(2); }} placeholder="Bu gece ne yapıyoruz?" /> : null}
+    {step === 1 ? <><input autoFocus className="wizard-input" value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && prompt.trim()) setStep(2); }} placeholder="Bu gece ne yapıyoruz?" /><div className="prompt-templates">{PROMPT_TEMPLATES.map((item) => <button key={item} className={`prompt-chip ${prompt === item ? "selected" : ""}`} onClick={() => setPrompt(item)}>{item}</button>)}</div></> : null}
     {step === 2 ? <div className="wizard-choices"><button className={`wizard-choice ${optionSource === "crowd" ? "selected" : ""}`} onClick={() => setOptionSource("crowd")}><span className="choice-index">A</span><strong>HERKES FİKİR ATSIN</strong><p>Masaya herkes bir şey bıraksın.</p></button><button className={`wizard-choice ${optionSource === "manual" ? "selected" : ""}`} onClick={() => setOptionSource("manual")}><span className="choice-index">B</span><strong>SEÇENEKLER BELLİ</strong><p>Ne arasında kaldığımız belli.</p></button></div> : null}
     {step === 3 ? <div className="wizard-category">{["Oyun", "Film", "Buluşma", "Yemek", "Aktivite", "Özel"].map((item, index) => <button key={item} className={`wizard-choice compact ${category === item ? "selected" : ""}`} onClick={() => setCategory(item)}><span className="choice-index">0{index + 1}</span><strong>{item}</strong></button>)}</div> : null}
     {step === 4 ? <div className="wizard-choices"><button className={`wizard-choice ${planningMode === "decision" ? "selected" : ""}`} onClick={() => setPlanningMode("decision")}><span className="choice-index">A</span><strong>GEREKMİYOR</strong><p>Sadece ana karar çıksın.</p></button><button className={`wizard-choice ${planningMode === "schedule" ? "selected" : ""}`} onClick={() => setPlanningMode("schedule")}><span className="choice-index">B</span><strong>TARİH + SAAT OYLAMASI</strong><p>Tarih oylansın. Sonra herkes saat önersin ve saatlere ayrıca oy versin.</p></button></div> : null}
@@ -850,9 +902,19 @@ function WizardHeader({ step, total, onBack, label }: { step: number; total: num
 
 function Lobby({ event, member, onStart, onBack }: { event: EventData; member: Member; onStart: () => void; onBack: () => void }) {
   const joinedCount = event.joined.length;
+  const missing = MEMBERS.filter((person) => !event.joined.includes(person.id)).map((person) => person.name);
+  const nudgeMissing = async () => {
+    const text = `UNKAN masası seni bekliyor${missing.length ? `: ${missing.join(", ")}` : ""}. Bir gir de demokrasi başlayabilsin :)`;
+    try {
+      if (navigator.share) await navigator.share({ title: "UNKAN masası", text, url: window.location.origin });
+      else window.open(`https://wa.me/?text=${encodeURIComponent(`${text}\n${window.location.origin}`)}`, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+    }
+  };
   return <section className="screen"><div className="screen-head"><div><button className="icon-button" onClick={onBack}><ChevronLeft size={18} /></button><div className="eyebrow" style={{ marginTop: 22 }}>Masa kuruluyor · {event.prompt}</div><h1 className="screen-title">HERKESİ<br /><span style={{ color: "var(--acid)" }}>TOPLUYORUZ.</span></h1></div><div className="member-pill"><span className="member-dot" />{joinedCount} / 8</div></div>
     <div className="surface lobby-wrap"><div className={`lobby-center ${joinedCount === 8 ? "ready" : ""}`}><div className="table-mark"><span>{joinedCount === 8 ? "✓" : joinedCount}</span></div><h2>{joinedCount === 8 ? "TAM KADRO." : `${joinedCount} / 8`}</h2><p>{copyForCount(joinedCount)}</p></div>{MEMBERS.map((person, index) => <motion.div key={`${person.id}-${event.joined.includes(person.id) ? "joined" : "empty"}`} className={`seat ${event.joined.includes(person.id) ? "joined" : ""}`} initial={{ opacity: 0, scale: .8, x: "-50%", y: "-80%", rotate: index % 2 ? 7 : -6 }} animate={{ opacity: 1, scale: 1, x: "-50%", y: "-50%", rotate: 0 }} transition={{ ...motionTokens.spring.card, delay: index * .04 }}><div className="seat-avatar">{event.joined.includes(person.id) ? person.initials : "·"}</div><div className="seat-name">{person.name}</div><div className="seat-status">{event.joined.includes(person.id) ? "MASADA" : "BEKLENİYOR"}</div></motion.div>)}</div>
-    <div className="lobby-footer"><div><div className="progress-line"><span style={{ width: `${joinedCount / 8 * 100}%` }} /></div><WaitingLine memberIds={MEMBERS.map((person) => person.id)} completedIds={event.joined} />{member.role === "ADMIN" && joinedCount < 8 ? <span className="admin-start-note">Admin masayı erken açabilir · şu an {joinedCount} kişi var</span> : null}</div>{member.role === "ADMIN" ? <button className="button primary" onClick={onStart}>KAOSU BAŞLAT <ArrowUpRight size={16} /></button> : <span className="small muted">Burak düğmeye bassın da başlayalım.</span>}</div>
+    <div className="lobby-footer"><div><div className="progress-line"><span style={{ width: `${joinedCount / 8 * 100}%` }} /></div><WaitingLine memberIds={MEMBERS.map((person) => person.id)} completedIds={event.joined} />{member.role === "ADMIN" && joinedCount < 8 ? <span className="admin-start-note">Admin masayı erken açabilir · şu an {joinedCount} kişi var</span> : null}{joinedCount < 8 ? <button className="button ghost nudge-button" onClick={() => void nudgeMissing()}><MessageCircle size={15} /> EKSİKLERİ ÇAĞIR</button> : null}</div>{member.role === "ADMIN" ? <button className="button primary" onClick={onStart}>KAOSU BAŞLAT <ArrowUpRight size={16} /></button> : <span className="small muted">Burak düğmeye bassın da başlayalım.</span>}</div>
   </section>;
 }
 
@@ -877,7 +939,7 @@ function VotingStage({ event, member, onVote, onClose }: { event: EventData; mem
   return <section className="screen"><div className="screen-head"><div><div className="eyebrow">Round {event.optionSource === "crowd" ? 2 : 1} · gizli approval voting</div><h1 className="screen-title">HANGİLERİNE<br /><span style={{ color: "var(--acid)" }}>OK'SİN?</span></h1><p className="screen-subtitle">Uyanların hepsini seç. Kimin neye bastığı görünmeyecek.</p></div><div className="round-meta"><RoundTimer endsAt={event.roundEndsAt} /><div className="vote-progress">{votedCount} / {participants.length} OY GELDİ.</div></div></div><div className="surface vote-stage"><div className="vote-header"><div><span className="eyebrow">En az {threshold} kabul gerekli</span><h2>{event.prompt}</h2></div><CircleHelp size={20} color="var(--muted)" /></div><div className="vote-grid">{optionList.map((option, index) => <motion.button key={option.id} whileTap={{ scale: .98 }} transition={motionTokens.spring.button} className={`vote-card ${selected.includes(option.id) ? "selected" : ""}`} disabled={Boolean(event.votes[member.id])} onClick={() => setSelected((items) => items.includes(option.id) ? items.filter((id) => id !== option.id) : [...items, option.id])}><span className="card-symbol">0{index + 1}</span><strong>{option.text}</strong><span className="check" /></motion.button>)}</div><div className="voter-row" aria-label="Oy ilerlemesi">{participants.map((person) => <span key={person.id} className={event.votes[person.id] ? "voter joined" : "voter"} title={event.votes[person.id] ? `${person.name} oy verdi` : `${person.name} bekleniyor`}>{event.votes[person.id] ? person.initials : ""}</span>)}</div><div className="vote-footer"><WaitingLine memberIds={event.joined} completedIds={Object.keys(event.votes)} /><div className="action-row"><button className="button primary" disabled={!selected.length || Boolean(event.votes[member.id])} onClick={() => onVote(selected)}>{event.votes[member.id] ? "OYUN GİTTİ" : "OYU GÖNDER"} <Check size={15} /></button>{member.role === "ADMIN" ? <button className="button ghost" onClick={onClose}>OYLAMAYI KAPAT</button> : null}</div></div></div></section>;
 }
 
-function ResultStage({ event, reducedMotion, soundEnabled }: { event: EventData; reducedMotion: boolean; soundEnabled: boolean }) {
+function ResultStage({ event, reducedMotion, soundEnabled, meta, onReact }: { event: EventData; reducedMotion: boolean; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void }) {
   const optionList = getOptionList(event);
   const result = percentageWinner(event.votes, optionList.map((item) => item.id), event.joined.length);
   const winner = optionList.find((item) => item.id === event.winnerId) ?? optionList.find((item) => item.id === result.counts[0]?.id);
@@ -885,7 +947,7 @@ function ResultStage({ event, reducedMotion, soundEnabled }: { event: EventData;
   useEffect(() => { const timers = [window.setTimeout(() => setStep("counting"), reducedMotion ? 1 : 800), window.setTimeout(() => setStep("eliminating"), reducedMotion ? 2 : 1700), window.setTimeout(() => setStep("winner"), reducedMotion ? 3 : 2350)]; return () => timers.forEach(window.clearTimeout); }, [reducedMotion]);
   useEffect(() => { if (step === "eliminating") playUiSound("eliminate", soundEnabled); }, [step, soundEnabled]);
   const losers = optionList.filter((item) => item.id !== winner?.id);
-  return <section className="screen"><div className="surface reveal-stage"><div className="reveal-title"><div className="eyebrow">{step === "winner" ? "Karar masada" : "Sonuç sahnesi"}</div><h2>{step === "winner" ? "BİTTİ." : "OYLAMA BİTTİ."}</h2><p>{step === "winner" ? "Bu gece bu." : "Bakalım ne saçmaladınız."}</p></div><AnimatePresence>{step !== "winner" ? losers.map((item, index) => <motion.div key={item.id} className="eliminated-card" style={{ ["--x" as string]: `${17 + (index * 19) % 70}%`, ["--y" as string]: `${29 + (index % 3) * 19}%`, ["--r" as string]: `${index % 2 ? 5 : -5}deg` }} initial={{ opacity: 0, scale: .6, x: "-50%", y: "-80%" }} animate={{ opacity: step === "eliminating" && index < losers.length - 1 ? .12 : .72, scale: 1, x: "-50%", y: "-50%" }} exit={{ opacity: 0, scale: .86, x: "-50%", y: "170%", rotate: index % 2 ? 16 : -16, transition: { duration: reducedMotion ? .05 : motionTokens.duration.elimination, ease: motionTokens.ease.exit } }} transition={{ ...motionTokens.spring.card, delay: index * .12 }}><strong>{item.text}</strong><span>{step === "eliminating" ? resultCopy[index % resultCopy.length] : "oylar geliyor"}</span></motion.div>) : null}</AnimatePresence><AnimatePresence mode="wait">{winner ? <motion.div layoutId="winner-card" key={step === "winner" ? "winner" : "center"} className="result-card" initial={{ opacity: 0, scale: .75, x: "-50%", y: "-50%", rotate: -4 }} animate={{ opacity: 1, scale: step === "winner" ? 1.08 : 1, x: "-50%", y: "-50%", rotate: 0 }} transition={{ ...motionTokens.spring.heavy, duration: reducedMotion ? .05 : undefined }}><div className="result-chip">{step === "winner" ? "TEK SEÇENEK KALDI" : "OY TOKENLARI"}</div><h3>{winner.text}</h3><p>{step === "winner" ? "Diğer seçenekler başka bir gün." : "Sonuçlar hesaplanıyor..."}</p></motion.div> : null}</AnimatePresence></div></section>;
+  return <section className="screen"><div className="surface reveal-stage"><div className="reveal-title"><div className="eyebrow">{step === "winner" ? "Karar masada" : "Sonuç sahnesi"}</div><h2>{step === "winner" ? "BİTTİ." : "OYLAMA BİTTİ."}</h2><p>{step === "winner" ? "Bu gece bu." : "Bakalım ne saçmaladınız."}</p></div><AnimatePresence>{step !== "winner" ? losers.map((item, index) => <motion.div key={item.id} className="eliminated-card" style={{ ["--x" as string]: `${17 + (index * 19) % 70}%`, ["--y" as string]: `${29 + (index % 3) * 19}%`, ["--r" as string]: `${index % 2 ? 5 : -5}deg` }} initial={{ opacity: 0, scale: .6, x: "-50%", y: "-80%" }} animate={{ opacity: step === "eliminating" && index < losers.length - 1 ? .12 : .72, scale: 1, x: "-50%", y: "-50%" }} exit={{ opacity: 0, scale: .86, x: "-50%", y: "170%", rotate: index % 2 ? 16 : -16, transition: { duration: reducedMotion ? .05 : motionTokens.duration.elimination, ease: motionTokens.ease.exit } }} transition={{ ...motionTokens.spring.card, delay: index * .12 }}><strong>{item.text}</strong><span>{step === "eliminating" ? resultCopy[index % resultCopy.length] : "oylar geliyor"}</span></motion.div>) : null}</AnimatePresence><AnimatePresence mode="wait">{winner ? <motion.div layoutId="winner-card" key={step === "winner" ? "winner" : "center"} className="result-card" initial={{ opacity: 0, scale: .75, x: "-50%", y: "-50%", rotate: -4 }} animate={{ opacity: 1, scale: step === "winner" ? 1.08 : 1, x: "-50%", y: "-50%", rotate: 0 }} transition={{ ...motionTokens.spring.heavy, duration: reducedMotion ? .05 : undefined }}><div className="result-chip">{step === "winner" ? "TEK SEÇENEK KALDI" : "OY TOKENLARI"}</div><h3>{winner.text}</h3><p>{step === "winner" ? "Diğer seçenekler başka bir gün." : "Sonuçlar hesaplanıyor..."}</p></motion.div> : null}</AnimatePresence></div>{step === "winner" ? <ReactionBar meta={meta} onReact={onReact} /> : null}</section>;
 }
 
 function DayRoundStage({ event, member, onSubmit }: { event: EventData; member: Member; onSubmit: (days: string[]) => void }) {
@@ -938,19 +1000,19 @@ function PlaceVotingStage({ event, member, onVote }: { event: EventData; member:
   return <section className="screen"><div className="screen-head"><div><div className="eyebrow">Mekân roundu 2/2 · gizli oylama</div><h1 className="screen-title">ŞİMDİ<br /><span style={{ color: "var(--acid)" }}>YERİ SEÇ.</span></h1><p className="screen-subtitle">Öneriler masada. Sana uyan tek yeri seç.</p></div><div className="round-meta"><RoundTimer endsAt={event.roundEndsAt} /><div className="vote-progress">{Object.keys(votes).length} / {eligibleIds.length} OY GELDİ</div></div></div><div className="surface vote-stage"><div className="vote-grid">{ideas.map((idea, index) => <motion.button key={idea.id} whileTap={{ scale: .98 }} className={`vote-card ${selected === idea.id ? "selected" : ""}`} disabled={!isEligible || alreadySubmitted} onClick={() => setSelected(idea.id)}><span className="card-symbol">0{index + 1}</span><strong>{idea.text}</strong><span className="check" /></motion.button>)}</div><div className="vote-footer"><WaitingLine memberIds={eligibleIds} completedIds={Object.keys(votes)} />{isEligible ? <button className="button primary" disabled={!selected || alreadySubmitted} onClick={() => onVote(selected)}>{alreadySubmitted ? "OYUN GİTTİ" : "YERİ SEÇ"}</button> : <span className="place-observer">Bu turu izliyorsun.</span>}</div></div></section>;
 }
 
-function PlaceResultStage({ event, soundEnabled }: { event: EventData; soundEnabled: boolean }) {
+function PlaceResultStage({ event, soundEnabled, meta, onReact }: { event: EventData; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void }) {
   const winner = getPlaceWinner(event);
   useEffect(() => { playUiSound("eliminate", soundEnabled); }, [soundEnabled]);
-  return <section className="screen"><div className="surface schedule-result-stage"><div className="schedule-result-title"><div className="eyebrow">Mekân havuzu kapandı</div><h1>YER BELLİ.</h1><p>Sırada bu işi toparlayacak kişi var.</p></div><motion.div className="place-winner" initial={{ opacity: 0, y: 50, rotate: -3 }} animate={{ opacity: 1, y: 0, rotate: 0 }} transition={motionTokens.spring.heavy}><MapPin size={28} /><strong>{winner?.text ?? "Mekân"}</strong><span>MASADA KALDI</span></motion.div></div></section>;
+  return <section className="screen"><div className="surface schedule-result-stage"><div className="schedule-result-title"><div className="eyebrow">Mekân havuzu kapandı</div><h1>YER BELLİ.</h1><p>Sırada bu işi toparlayacak kişi var.</p></div><motion.div className="place-winner" initial={{ opacity: 0, y: 50, rotate: -3 }} animate={{ opacity: 1, y: 0, rotate: 0 }} transition={motionTokens.spring.heavy}><MapPin size={28} /><strong>{winner?.text ?? "Mekân"}</strong><span>MASADA KALDI</span></motion.div><ReactionBar meta={meta} onReact={onReact} /></div></section>;
 }
 
-function SchedulePoolResult({ event, kind }: { event: EventData; kind: "day" | "time" }) {
+function SchedulePoolResult({ event, kind, meta, onReact }: { event: EventData; kind: "day" | "time"; meta: EventMeta; onReact: (reaction: string) => void }) {
   const schedule = event.schedule ?? { availability: {}, time: {} };
   const items = kind === "day"
     ? (schedule.dayOptions ?? []).map((value) => ({ value, count: Object.values(schedule.availability).filter((days) => days.includes(value)).length }))
     : [...new Set(Object.values(schedule.time).filter(Boolean))].map((value) => ({ value, count: Object.values(schedule.timeVotes ?? {}).filter((time) => time === value).length }));
   const winner = kind === "day" ? schedule.selectedDay : schedule.selectedTime;
-  return <section className="screen"><div className="surface schedule-result-stage"><div className="schedule-result-title"><div className="eyebrow">{kind === "day" ? "Tarih havuzu kapandı" : "Saat havuzu kapandı"}</div><h1>{kind === "day" ? "TARİH ÇIKTI." : "SAAT ÇIKTI."}</h1><p>{kind === "day" ? "Sırada bu tarihe uyanların saat havuzu var." : "Planın zamanı belli."}</p></div><div className="schedule-result-pool">{items.sort((a, b) => b.count - a.count).map((item, index) => <motion.div key={item.value} className={`schedule-result-card ${item.value === winner ? "winner" : "loser"}`} initial={{ opacity: 0, y: -18, rotate: index % 2 ? 2 : -2 }} animate={{ opacity: item.value === winner ? 1 : .28, y: item.value === winner ? 0 : 20, rotate: 0, scale: item.value === winner ? 1.04 : .94 }} transition={{ ...motionTokens.spring.card, delay: index * .09 }}><span>{item.count} TOKEN</span><strong>{kind === "day" ? formatPlanDay(item.value) : item.value}</strong><small>{item.value === winner ? "KAZANDI" : "ELENDİ"}</small></motion.div>)}</div></div></section>;
+  return <section className="screen"><div className="surface schedule-result-stage"><div className="schedule-result-title"><div className="eyebrow">{kind === "day" ? "Tarih havuzu kapandı" : "Saat havuzu kapandı"}</div><h1>{kind === "day" ? "TARİH ÇIKTI." : "SAAT ÇIKTI."}</h1><p>{kind === "day" ? "Sırada bu tarihe uyanların saat havuzu var." : "Planın zamanı belli."}</p></div><div className="schedule-result-pool">{items.sort((a, b) => b.count - a.count).map((item, index) => <motion.div key={item.value} className={`schedule-result-card ${item.value === winner ? "winner" : "loser"}`} initial={{ opacity: 0, y: -18, rotate: index % 2 ? 2 : -2 }} animate={{ opacity: item.value === winner ? 1 : .28, y: item.value === winner ? 0 : 20, rotate: 0, scale: item.value === winner ? 1.04 : .94 }} transition={{ ...motionTokens.spring.card, delay: index * .09 }}><span>{item.count} TOKEN</span><strong>{kind === "day" ? formatPlanDay(item.value) : item.value}</strong><small>{item.value === winner ? "KAZANDI" : "ELENDİ"}</small></motion.div>)}</div><ReactionBar meta={meta} onReact={onReact} /></div></section>;
 }
 
 function RoundTimer({ endsAt }: { endsAt?: number }) {
@@ -970,20 +1032,25 @@ function NoDecisionStage({ member, failedRound, onRetry, onBack }: { member: Mem
   const isTimeRound = failedRound === "timeSuggestion" || failedRound === "timeVoting";
   const label = failedRound === "day" ? "TARİH ÇIKMADI." : isTimeRound ? "SAAT ÇIKMADI." : "KARAR ÇIKMADI.";
   const detail = failedRound === "day" ? "Bütün katılımcılar tarih seçimini tamamlamadı." : failedRound === "timeSuggestion" ? "Bütün katılımcılar saat önermedi." : failedRound === "timeVoting" ? "Bütün katılımcılar saat oyunu kullanmadı." : "Yeterli geçerli cevap gelmedi.";
-  return <section className="screen"><div className="surface no-decision"><div className="eyebrow">Round kapandı</div><h1>BU MASADAN<br />{label}</h1><p>{detail} Aynı havuzu bir tur daha açabilirsiniz.</p><div className="action-row">{member.role === "ADMIN" ? <button className="button primary" onClick={onRetry}>AYNI HAVUZU TEKRARLA</button> : <span className="small muted">Burak isterse aynı havuzu tekrar açabilir.</span>}<button className="button ghost" onClick={onBack}>Ana masa</button></div></div></section>;
+  return <section className="screen"><div className="surface no-decision"><div className="eyebrow">Masa kısa bir mola verdi</div><h1>KİMSE BUNU<br /><span style={{ color: "var(--acid)" }}>YETERİNCE İSTEMEDİ.</span></h1><p>{detail} İstersen aynı havuzu bir tur daha açıp tekrar deneyebilirsiniz.</p><div className="action-row">{member.role === "ADMIN" ? <button className="button primary" onClick={onRetry}>YENİ TUR ATALIM</button> : <span className="small muted">Burak isterse yeni turu başlatabilir.</span>}<button className="button ghost" onClick={onBack}>Ana masa</button></div></div></section>;
 }
 
-function OrganizerStage({ event, member, soundEnabled, onSubmit }: { event: EventData; member: Member; soundEnabled: boolean; onSubmit: (detail: string) => void }) {
+function ReactionBar({ meta, onReact }: { meta: EventMeta; onReact: (reaction: string) => void }) {
+  return <div className="reaction-bar"><span className="eyebrow">MASA TEPKİSİ</span><div className="reaction-list">{REACTION_OPTIONS.map((reaction) => <button key={reaction} className={`reaction-button ${Object.values(meta.reactions).filter((item) => item === reaction).length ? "has-reaction" : ""}`} onClick={() => onReact(reaction)}>{reaction}<small>{Object.values(meta.reactions).filter((item) => item === reaction).length || ""}</small></button>)}</div></div>;
+}
+
+function OrganizerStage({ event, member, soundEnabled, meta, onReact, onSubmit }: { event: EventData; member: Member; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void; onSubmit: (detail: string) => void }) {
   const [detail, setDetail] = useState("");
   const organizer = MEMBERS.find((person) => person.id === event.organizerId);
   const isOrganizer = member.id === event.organizerId;
   useEffect(() => { playUiSound("roulette", soundEnabled); }, [soundEnabled]);
-  return <section className="screen"><div className="surface organizer-stage"><div className="organizer-stage-inner"><div><div className="eyebrow">Adil rotation · final görev</div><h2>TAMAM DA<br /><span style={{ color: "var(--acid)" }}>BUNU KİM TOPARLAYACAK?</span></h2><p className="muted">Kurban seçildi.</p><motion.div className="roulette-name" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>{organizer?.name ?? "..."}</motion.div><p className="organizer-copy">{event.organizerMessage ?? "Kaçış yok."}</p></div><div className="organizer-wait organizer-message-round"><div><span className="eyebrow">{isOrganizer ? "Son söz sende" : `${possessiveName(organizer?.name ?? "Organizatör")} ek mesajı bekleniyor`}</span><p>{isOrganizer ? "Yer, buluşma notu veya herkese söylemek istediğin kısa mesajı ekleyebilirsin." : `${organizer?.name ?? "Organizatör"} isterse son bir yer veya mesaj ekleyebilir.`}</p></div><div className="organizer-message-timer"><RoundTimer endsAt={event.roundEndsAt} /><span>SANİYE İÇİNDE PLAN KAPANIR</span></div>{isOrganizer ? <div className="organizer-message-form"><input className="input" autoFocus value={detail} maxLength={180} onChange={(inputEvent) => setDetail(inputEvent.target.value)} placeholder="Örn. Yer Viaport, saat 20.15. Herkese selam." /><button className="button primary" disabled={!detail.trim()} onClick={() => onSubmit(detail)}>MESAJI EKLE</button></div> : null}</div></div></div></section>;
+  return <section className="screen"><div className="surface organizer-stage"><div className="organizer-stage-inner"><div><div className="eyebrow">Adil rotation · final görev</div><h2>TAMAM DA<br /><span style={{ color: "var(--acid)" }}>BUNU KİM TOPARLAYACAK?</span></h2><p className="muted">Kurban seçildi.</p><motion.div className="roulette-name" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>{organizer?.name ?? "..."}</motion.div><p className="organizer-copy">{event.organizerMessage ?? "Kaçış yok."}</p></div><div className="organizer-wait organizer-message-round"><div><span className="eyebrow">{isOrganizer ? "Son söz sende" : `${possessiveName(organizer?.name ?? "Organizatör")} ek mesajı bekleniyor`}</span><p>{isOrganizer ? "Yer, buluşma notu veya herkese söylemek istediğin kısa mesajı ekleyebilirsin." : `${organizer?.name ?? "Organizatör"} isterse son bir yer veya mesaj ekleyebilir.`}</p></div><div className="organizer-message-timer"><RoundTimer endsAt={event.roundEndsAt} /><span>SANİYE İÇİNDE PLAN KAPANIR</span></div>{isOrganizer ? <div className="organizer-message-form"><input className="input" autoFocus value={detail} maxLength={180} onChange={(inputEvent) => setDetail(inputEvent.target.value)} placeholder="Örn. Yer Viaport, saat 20.15. Herkese selam." /><button className="button primary" disabled={!detail.trim()} onClick={() => onSubmit(detail)}>MESAJI EKLE</button></div> : null}</div><ReactionBar meta={meta} onReact={onReact} /></div></div></section>;
 }
 
-function FinalStage({ event, soundEnabled, onBack }: { event: EventData; soundEnabled: boolean; onBack: () => void }) {
+function FinalStage({ event, member, soundEnabled, meta, onAcknowledge, onReact, onBack }: { event: EventData; member: Member; soundEnabled: boolean; meta: EventMeta; onAcknowledge: () => void; onReact: (reaction: string) => void; onBack: () => void }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [shareState, setShareState] = useState<"idle" | "shared" | "error">("idle");
+  const [now, setNow] = useState(Date.now());
   const optionList = getOptionList(event);
   const winner = optionList.find((item) => item.id === event.winnerId) ?? optionList[0];
   const participantIds = event.planningMode === "schedule" && event.participants?.length ? event.participants : event.joined;
@@ -996,6 +1063,9 @@ function FinalStage({ event, soundEnabled, onBack }: { event: EventData; soundEn
   const planTime = event.planningMode === "decision" ? "BU GECE" : `${formatPlanDay(event.schedule?.selectedDay)} · ${event.schedule?.selectedTime ?? "—"}`;
   const calendarUrl = googleCalendarUrl(event, activity, organizerName);
   const plainText = `${planDate}${event.schedule?.selectedTime ? ` · ${event.schedule.selectedTime}` : ""} — ${activity}${place ? ` · ${place}` : ""}. Organizasyonu ${organizerName} üstlenecek.${event.organizerDetail ? ` ${possessiveName(organizerName)} ek mesajı: ${event.organizerDetail}` : ""}`;
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(timer); }, []);
+  const planStarted = Boolean(planStartsAt(event) && planStartsAt(event)! <= now);
+  const nextStep = planStarted ? "Plan başladı." : event.organizerDetail ? "Planı uygulamak." : `${organizerName}'dan son detay bekleniyor.`;
   useEffect(() => { playUiSound("lock", soundEnabled); }, [soundEnabled]);
   const copyPlan = async () => {
     const markdown = [
@@ -1033,6 +1103,7 @@ function FinalStage({ event, soundEnabled, onBack }: { event: EventData; soundEn
       window.setTimeout(() => setShareState("idle"), 2200);
     }
   };
+  const shareWhatsApp = () => { window.open(`https://wa.me/?text=${encodeURIComponent(`${plainText}\n\n${window.location.origin}`)}`, "_blank", "noopener,noreferrer"); };
   const feedback = copyState === "copied" ? "Markdown plan panoya kopyalandı." : copyState === "error" ? "Kopyalanamadı. Tarayıcı iznini kontrol et." : shareState === "shared" ? "Paylaşım hazır." : shareState === "error" ? "Paylaşım açılamadı." : "Karar herkes için görünür.";
-  return <section className="screen final-screen"><div className="screen-head final-screen-head"><div><div className="eyebrow">Final plan · hazır</div><h1 className="screen-title">PLAN<br /><span style={{ color: "var(--acid)" }}>HAZIR.</span></h1></div><button className="button ghost" onClick={onBack}><ChevronLeft size={15} /> Ana sayfa</button></div><div className="surface final-card"><div className="eyebrow">UNKAN / {event.category}</div><h2>{activity}</h2><div className="final-meta"><span className="meta-chip">{planTime}</span>{place ? <span className="meta-chip"><MapPin size={13} /> {place}</span> : null}<span className="meta-chip">{event.category}</span><span className="meta-chip">{participants.length} kişi</span></div>{event.organizerDetail ? <div className="final-detail"><span className="eyebrow">{possessiveName(organizerName)} ek mesajı</span><p>{event.organizerDetail}</p></div> : null}{event.planningMode === "schedule" ? <div className="participant-list"><span className="eyebrow">KATILIMCILAR</span><div>{participants.map((person) => <span key={person.id}>{person.name}</span>)}</div></div> : null}<div className="organizer-block"><div className="eyebrow">ORGANİZATÖR</div><strong>{organizerName}</strong><p className="organizer-promise">{event.organizerMessage ?? "Bu organizeyi sen yapacaksın, sana güveniyorum. Lütfen görevini aksatma :)"}</p></div></div><div className="final-actions"><span className="small muted" aria-live="polite"><Check size={14} /> {feedback}</span><div className="final-action-buttons"><button className="button ghost" onClick={() => void copyPlan()}>{copyState === "copied" ? "KOPYALANDI" : "Planı kopyala"} {copyState === "copied" ? <Check size={15} /> : <ArrowUpRight size={15} />}</button><button className="button ghost" onClick={() => void sharePlan()}><Share2 size={15} /> {shareState === "shared" ? "PAYLAŞILDI" : "Paylaş"}</button>{calendarUrl ? <a className="button primary" href={calendarUrl} target="_blank" rel="noreferrer"><CalendarPlus size={16} /> Takvime ekle</a> : null}</div></div>{calendarUrl ? <p className="calendar-note">Google Calendar planı hazır açar. Kaydettiğinde kendi takvimindeki varsayılan hatırlatmalar çalışır.</p> : null}<div className="instagram-promo"><span className="eyebrow">UNKAN'ı takip et</span><div className="instagram-links"><a href="https://www.instagram.com/burakunkan/" target="_blank" rel="noreferrer" className="instagram-link"><span className="instagram-icon"><Instagram size={17} /></span><span>@burakunkan</span><ArrowUpRight size={14} /></a><a href="https://www.instagram.com/unkan.ai/" target="_blank" rel="noreferrer" className="instagram-link"><span className="instagram-icon"><Instagram size={17} /></span><span>@unkan.ai</span><ArrowUpRight size={14} /></a></div></div></section>;
+  return <section className="screen final-screen"><div className="screen-head final-screen-head"><div><div className="eyebrow">Final plan · hazır</div><h1 className="screen-title">PLAN<br /><span style={{ color: "var(--acid)" }}>HAZIR.</span></h1></div><button className="button ghost" onClick={onBack}><ChevronLeft size={15} /> Ana sayfa</button></div><div className="surface final-card"><div className="eyebrow">UNKAN / {event.category}</div><h2>{activity}</h2><div className="final-meta"><span className="meta-chip">{planTime}</span>{place ? <span className="meta-chip"><MapPin size={13} /> {place}</span> : null}<span className="meta-chip">{event.category}</span><span className="meta-chip">{participants.length} kişi</span></div><div className="next-step-card"><span className="eyebrow">SIRADAKİ İŞ</span><strong>{planStarted ? "PLAN BAŞLADI." : nextStep}</strong></div>{event.organizerDetail ? <div className="final-detail"><span className="eyebrow">{possessiveName(organizerName)} ek mesajı</span><p>{event.organizerDetail}</p></div> : null}{event.planningMode === "schedule" ? <div className="participant-list"><span className="eyebrow">KATILIMCILAR</span><div>{participants.map((person) => <span key={person.id}>{person.name}</span>)}</div></div> : null}<div className="organizer-block"><div className="eyebrow">ORGANİZATÖR</div><strong>{organizerName}</strong><p className="organizer-promise">{event.organizerMessage ?? "Bu organizeyi sen yapacaksın, sana güveniyorum. Lütfen görevini aksatma :)"}</p></div><div className="decision-receipt"><span>UNKAN KARAR FİŞİ</span><strong>{activity}</strong><small>{planTime}</small><small>ORGANİZATÖR · {organizerName}</small><b>PLAN KAPANDI</b></div><div className="acknowledgement"><div><span className="eyebrow">PLANI GÖRDÜN MÜ?</span><div className="ack-list">{MEMBERS.map((person) => <span key={person.id} className={meta.acknowledged.includes(person.id) ? "seen" : "waiting"}>{person.name} {meta.acknowledged.includes(person.id) ? "✓" : "…"}</span>)}</div></div><button className="button ghost" disabled={meta.acknowledged.includes(member.id)} onClick={onAcknowledge}><ClipboardCheck size={15} /> {meta.acknowledged.includes(member.id) ? "GÖRDÜN ✓" : "GÖRDÜM"}</button></div><ReactionBar meta={meta} onReact={onReact} /></div><div className="final-actions"><span className="small muted" aria-live="polite"><Check size={14} /> {feedback}</span><div className="final-action-buttons"><button className="button ghost" onClick={() => void copyPlan()}>{copyState === "copied" ? "KOPYALANDI" : "Planı kopyala"} {copyState === "copied" ? <Check size={15} /> : <ArrowUpRight size={15} />}</button><button className="button ghost" onClick={() => void sharePlan()}><Share2 size={15} /> {shareState === "shared" ? "PAYLAŞILDI" : "Paylaş"}</button><button className="button ghost" onClick={shareWhatsApp}><MessageCircle size={15} /> WhatsApp’a gönder</button>{calendarUrl ? <a className="button primary" href={calendarUrl} target="_blank" rel="noreferrer"><CalendarPlus size={16} /> Takvime ekle</a> : null}</div></div>{calendarUrl ? <p className="calendar-note">Google Calendar planı hazır açar. Kaydettiğinde kendi takvimindeki varsayılan hatırlatmalar çalışır.</p> : null}<div className="instagram-promo"><span className="eyebrow">UNKAN'ı takip et</span><div className="instagram-links"><a href="https://www.instagram.com/burakunkan/" target="_blank" rel="noreferrer" className="instagram-link"><span className="instagram-icon"><Instagram size={17} /></span><span>@burakunkan</span><ArrowUpRight size={14} /></a><a href="https://www.instagram.com/unkan.ai/" target="_blank" rel="noreferrer" className="instagram-link"><span className="instagram-icon"><Instagram size={17} /></span><span>@unkan.ai</span><ArrowUpRight size={14} /></a></div></div></section>;
 }
