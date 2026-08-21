@@ -400,6 +400,9 @@ button:disabled { cursor: not-allowed; }
 .vader-sound-button { min-height: 42px; padding: 0 14px; border: 1px solid rgba(198,243,107,.55); border-radius: 999px; color: var(--ink); background: rgba(10,13,11,.9); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: .04em; cursor: pointer; }
 .vader-sound-button:hover { color: var(--acid); border-color: var(--acid); }
 .vader-sound-hint { color: var(--muted); font-size: 11px; text-align: center; }
+.static-vader-scene { position: relative; inset: auto; min-height: 300px; }
+.static-vader-scene .vader-progress-track span { display: block; width: 72%; height: 100%; border-radius: inherit; background: var(--acid); animation: vader-progress 6s linear forwards; }
+.compact-place-winner { min-height: auto; padding: 10px 14px; justify-self: center; }
 @media (max-width: 680px) { .vader-scene::before { left: 4%; right: 4%; font-size: 7px; letter-spacing: 0; } .vader-scene::after { left: 4%; right: 4%; } }
 .vader-helmet { position: relative; width: 138px; height: 116px; display: grid; place-items: center; border: 2px solid rgba(198,243,107,.72); border-radius: 48% 48% 24% 24%; background: linear-gradient(145deg, #252b28, #070908 72%); box-shadow: 0 0 34px rgba(198,243,107,.18), inset 0 -18px 20px rgba(0,0,0,.8); clip-path: polygon(18% 0, 82% 0, 100% 68%, 76% 100%, 24% 100%, 0 68%); }
 .vader-helmet span { position: relative; z-index: 2; color: var(--acid); font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 700; letter-spacing: .18em; transform: translateY(-5px); }

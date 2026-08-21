@@ -527,7 +527,7 @@ export default function UnkanApp() {
       const organizer = getOrganizer(event);
       if (!organizer) return;
       saveEvent({ ...event, phase: "organizer", organizerId: organizer.id, organizerMessage: "Bu organizeyi sen yapacaksın, sana güveniyorum. Lütfen görevini aksatma :)", roundEndsAt: Date.now() + 15_000 });
-    }, reducedMotion ? 20 : 2200);
+    }, reducedMotion ? 5000 : 7000);
     return () => window.clearTimeout(timer);
   }, [event, member?.role, reducedMotion]);
 
@@ -1025,10 +1025,31 @@ function PlaceVotingStage({ event, member, onVote }: { event: EventData; member:
   return <section className="screen"><div className="screen-head"><div><div className="eyebrow">Mekân roundu 2/2 · gizli oylama</div><h1 className="screen-title">ŞİMDİ<br /><span style={{ color: "var(--acid)" }}>YERİ SEÇ.</span></h1><p className="screen-subtitle">Öneriler masada. Sana uyan tek yeri seç.</p></div><div className="round-meta"><RoundTimer endsAt={event.roundEndsAt} /><div className="vote-progress">{Object.keys(votes).length} / {eligibleIds.length} OY GELDİ</div></div></div><div className="surface vote-stage"><div className="vote-grid">{ideas.map((idea, index) => <motion.button key={idea.id} whileTap={{ scale: .98 }} className={`vote-card ${selected === idea.id ? "selected" : ""}`} disabled={!isEligible || alreadySubmitted} onClick={() => setSelected(idea.id)}><span className="card-symbol">0{index + 1}</span><strong>{idea.text}</strong><span className="check" /></motion.button>)}</div><div className="vote-footer"><WaitingLine memberIds={eligibleIds} completedIds={Object.keys(votes)} />{isEligible ? <button className="button primary" disabled={!selected || alreadySubmitted} onClick={() => onVote(selected)}>{alreadySubmitted ? "OYUN GİTTİ" : "YERİ SEÇ"}</button> : <span className="place-observer">Bu turu izliyorsun.</span>}</div></div></section>;
 }
 
+function DecisionVideo({ soundEnabled }: { soundEnabled: boolean }) {
+  const [muted, setMuted] = useState(!soundEnabled);
+  const [blocked, setBlocked] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    video.muted = !soundEnabled;
+    void video.play().catch(() => { video.muted = true; setMuted(true); setBlocked(soundEnabled); void video.play(); });
+  }, [soundEnabled]);
+  function toggleSound() {
+    const video = videoRef.current;
+    if (!video) return;
+    const next = !muted;
+    video.muted = next;
+    setMuted(next);
+    if (!next) void video.play().then(() => setBlocked(false)).catch(() => { video.muted = true; setMuted(true); setBlocked(true); });
+  }
+  return <div className="vader-scene static-vader-scene"><video ref={videoRef} className="vader-video" autoPlay muted={muted} playsInline preload="auto"><source src="/unkan.mp4" type="video/mp4" /></video><div className="vader-progress"><div className="vader-progress-track"><span /></div><div className="vader-progress-steps"><span className="done">✓ FİKİR</span><span className="done">✓ GÜN</span><span className="done">✓ SAAT</span><span className="active">ORGANİZATÖR SEÇİLİYOR...</span></div></div><button type="button" className="vader-sound-button" onClick={toggleSound}>{muted ? "🔇 SESİ AÇ" : "🔊 SESİ KAPAT"}</button>{blocked ? <span className="vader-sound-hint">Tarayıcı otomatik sesi engelledi. Açmak için dokun.</span> : null}</div>;
+}
+
 function PlaceResultStage({ event, soundEnabled, meta, onReact }: { event: EventData; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void }) {
   const winner = getPlaceWinner(event);
   useEffect(() => { playUiSound("eliminate", soundEnabled); }, [soundEnabled]);
-  return <section className="screen"><div className="surface schedule-result-stage"><div className="schedule-result-title"><div className="eyebrow">Mekân havuzu kapandı</div><h1>YER BELLİ.</h1><p>Sırada bu işi toparlayacak kişi var.</p></div><motion.div className="place-winner" initial={{ opacity: 0, y: 50, rotate: -3 }} animate={{ opacity: 1, y: 0, rotate: 0 }} transition={motionTokens.spring.heavy}><MapPin size={28} /><strong>{winner?.text ?? "Mekân"}</strong><span>MASADA KALDI</span></motion.div><ReactionBar meta={meta} onReact={onReact} /></div></section>;
+  return <section className="screen"><div className="surface schedule-result-stage"><div className="schedule-result-title"><div className="eyebrow">Son detay da masada</div><h1>MASA KAPANIYOR.</h1><p>Kararsızlıklar bitti. Plan toparlanıyor.</p></div><DecisionVideo soundEnabled={soundEnabled} /><div className="place-winner compact-place-winner"><MapPin size={18} /><strong>{winner?.text ?? "Mekân"}</strong></div><ReactionBar meta={meta} onReact={onReact} /></div></section>;
 }
 
 function SchedulePoolResult({ event, kind, meta, onReact }: { event: EventData; kind: "day" | "time"; meta: EventMeta; onReact: (reaction: string) => void }) {
