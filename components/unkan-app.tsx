@@ -1046,6 +1046,27 @@ function DecisionVideo({ soundEnabled }: { soundEnabled: boolean }) {
   return <div className="vader-scene static-vader-scene"><video ref={videoRef} className="vader-video" autoPlay muted={muted} playsInline preload="auto"><source src="/unkan.mp4" type="video/mp4" /></video><div className="vader-progress"><div className="vader-progress-track"><span /></div><div className="vader-progress-steps"><span className="done">✓ FİKİR</span><span className="done">✓ GÜN</span><span className="done">✓ SAAT</span><span className="active">ORGANİZATÖR SEÇİLİYOR...</span></div></div><button type="button" className="vader-sound-button" onClick={toggleSound}>{muted ? "🔇 SESİ AÇ" : "🔊 SESİ KAPAT"}</button>{blocked ? <span className="vader-sound-hint">Tarayıcı otomatik sesi engelledi. Açmak için dokun.</span> : null}</div>;
 }
 
+function FinalIntroVideo({ soundEnabled, onDone }: { soundEnabled: boolean; onDone: () => void }) {
+  const [muted, setMuted] = useState(!soundEnabled);
+  const [blocked, setBlocked] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const fallback = window.setTimeout(onDone, 8000);
+    const video = videoRef.current;
+    if (video) { video.muted = !soundEnabled; void video.play().catch(() => { video.muted = true; setMuted(true); setBlocked(soundEnabled); void video.play(); }); }
+    return () => window.clearTimeout(fallback);
+  }, [onDone, soundEnabled]);
+  function toggleSound() {
+    const video = videoRef.current;
+    if (!video) return;
+    const next = !muted;
+    video.muted = next;
+    setMuted(next);
+    if (!next) void video.play().then(() => setBlocked(false)).catch(() => { video.muted = true; setMuted(true); setBlocked(true); });
+  }
+  return <div className="vader-scene static-vader-scene final-intro-video"><video ref={videoRef} className="vader-video" autoPlay muted={muted} playsInline preload="auto" onEnded={onDone}><source src="/unkan.mp4" type="video/mp4" /></video><div className="vader-progress"><div className="vader-progress-track"><span /></div><div className="vader-progress-steps"><span className="done">✓ FİKİR</span><span className="done">✓ GÜN</span><span className="done">✓ SAAT</span><span className="active">ORGANİZATÖR SEÇİLİYOR...</span></div></div><button type="button" className="vader-sound-button" onClick={toggleSound}>{muted ? "🔇 SESİ AÇ" : "🔊 SESİ KAPAT"}</button>{blocked ? <span className="vader-sound-hint">Tarayıcı otomatik sesi engelledi. Açmak için dokun.</span> : null}</div>;
+}
+
 function PlaceResultStage({ event, soundEnabled, meta, onReact }: { event: EventData; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void }) {
   const winner = getPlaceWinner(event);
   useEffect(() => { playUiSound("eliminate", soundEnabled); }, [soundEnabled]);
@@ -1119,6 +1140,7 @@ function OrganizerStage({ event, member, soundEnabled, meta, onReact, onSubmit }
 }
 
 function FinalStage({ event, member, soundEnabled, meta, onAcknowledge, onReact, onBack }: { event: EventData; member: Member; soundEnabled: boolean; meta: EventMeta; onAcknowledge: () => void; onReact: (reaction: string) => void; onBack: () => void }) {
+  const [showIntro, setShowIntro] = useState(true);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [shareState, setShareState] = useState<"idle" | "shared" | "error">("idle");
   const [now, setNow] = useState(Date.now());
@@ -1176,5 +1198,6 @@ function FinalStage({ event, member, soundEnabled, meta, onAcknowledge, onReact,
   };
   const shareWhatsApp = () => { window.open(`https://wa.me/?text=${encodeURIComponent(`${plainText}\n\n${window.location.origin}`)}`, "_blank", "noopener,noreferrer"); };
   const feedback = copyState === "copied" ? "Markdown plan panoya kopyalandı." : copyState === "error" ? "Kopyalanamadı. Tarayıcı iznini kontrol et." : shareState === "shared" ? "Paylaşım hazır." : shareState === "error" ? "Paylaşım açılamadı." : "Karar herkes için görünür.";
+  if (showIntro) return <section className="screen final-video-screen"><div className="surface reveal-stage"><div className="reveal-title"><div className="eyebrow">UNKAN · KARAR FİŞİ HAZIRLANIYOR</div><h2>KARAR<br /><span style={{ color: "var(--acid)" }}>KAPANIYOR.</span></h2><p>Tek plan kalıyor.</p></div><FinalIntroVideo soundEnabled={soundEnabled} onDone={() => setShowIntro(false)} /></div></section>;
   return <section className="screen final-screen"><div className="screen-head final-screen-head"><div><div className="eyebrow">Final plan · hazır</div><h1 className="screen-title">PLAN<br /><span style={{ color: "var(--acid)" }}>HAZIR.</span></h1></div><button className="button ghost" onClick={onBack}><ChevronLeft size={15} /> Ana sayfa</button></div><div className="surface final-card"><div className="eyebrow">UNKAN / {event.category}</div><h2>{activity}</h2><div className="final-meta"><span className="meta-chip">{planTime}</span>{place ? <span className="meta-chip"><MapPin size={13} /> {place}</span> : null}<span className="meta-chip">{event.category}</span><span className="meta-chip">{participants.length} kişi</span></div><div className="next-step-card"><span className="eyebrow">SIRADAKİ İŞ</span><strong>{planStarted ? "PLAN BAŞLADI." : nextStep}</strong></div>{event.organizerDetail ? <div className="final-detail"><span className="eyebrow">{possessiveName(organizerName)} ek mesajı</span><p>{event.organizerDetail}</p></div> : null}{event.planningMode === "schedule" ? <div className="participant-list"><span className="eyebrow">KATILIMCILAR</span><div>{participants.map((person) => <span key={person.id}>{person.name}</span>)}</div></div> : null}<div className="organizer-block"><div className="eyebrow">ORGANİZATÖR</div><strong>{organizerName}</strong><p className="organizer-promise">{event.organizerMessage ?? "Bu organizeyi sen yapacaksın, sana güveniyorum. Lütfen görevini aksatma :)"}</p></div><div className="decision-receipt"><span>UNKAN KARAR FİŞİ</span><strong>{activity}</strong><small>{planTime}</small><small>ORGANİZATÖR · {organizerName}</small><b>PLAN KAPANDI</b></div><div className="acknowledgement"><div><span className="eyebrow">PLANI GÖRDÜN MÜ?</span><div className="ack-list">{MEMBERS.map((person) => <span key={person.id} className={meta.acknowledged.includes(person.id) ? "seen" : "waiting"}>{person.name} {meta.acknowledged.includes(person.id) ? "✓" : "…"}</span>)}</div></div><button className="button ghost" disabled={meta.acknowledged.includes(member.id)} onClick={onAcknowledge}><ClipboardCheck size={15} /> {meta.acknowledged.includes(member.id) ? "GÖRDÜN ✓" : "GÖRDÜM"}</button></div><ReactionBar meta={meta} onReact={onReact} /></div><div className="final-actions"><span className="small muted" aria-live="polite"><Check size={14} /> {feedback}</span><div className="final-action-buttons"><button className="button ghost" onClick={() => void copyPlan()}>{copyState === "copied" ? "KOPYALANDI" : "Planı kopyala"} {copyState === "copied" ? <Check size={15} /> : <ArrowUpRight size={15} />}</button><button className="button ghost" onClick={() => void sharePlan()}><Share2 size={15} /> {shareState === "shared" ? "PAYLAŞILDI" : "Paylaş"}</button><button className="button ghost" onClick={shareWhatsApp}><MessageCircle size={15} /> WhatsApp’a gönder</button>{calendarUrl ? <a className="button primary" href={calendarUrl} target="_blank" rel="noreferrer"><CalendarPlus size={16} /> Takvime ekle</a> : null}</div></div>{calendarUrl ? <p className="calendar-note">Google Calendar planı hazır açar. Kaydettiğinde kendi takvimindeki varsayılan hatırlatmalar çalışır.</p> : null}<div className="instagram-promo"><span className="eyebrow">UNKAN'ı takip et</span><div className="instagram-links"><a href="https://www.instagram.com/burakunkan/" target="_blank" rel="noreferrer" className="instagram-link"><span className="instagram-icon"><Instagram size={17} /></span><span>@burakunkan</span><ArrowUpRight size={14} /></a><a href="https://www.instagram.com/unkan.ai/" target="_blank" rel="noreferrer" className="instagram-link"><span className="instagram-icon"><Instagram size={17} /></span><span>@unkan.ai</span><ArrowUpRight size={14} /></a></div></div></section>;
 }
