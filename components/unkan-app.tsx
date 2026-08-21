@@ -1087,12 +1087,49 @@ function FinalIntroVideo({ soundEnabled, onDone }: { soundEnabled: boolean; onDo
   const [muted, setMuted] = useState(!soundEnabled);
   const [blocked, setBlocked] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const startedAtRef = useRef<number | null>(null);
+  const finishedRef = useRef(false);
+  const onDoneRef = useRef(onDone);
+
   useEffect(() => {
-    const fallback = window.setTimeout(onDone, 8000);
+    onDoneRef.current = onDone;
+  }, [onDone]);
+
+  const markStarted = () => {
+    if (startedAtRef.current === null) startedAtRef.current = Date.now();
+  };
+
+  const finish = () => {
+    if (finishedRef.current || startedAtRef.current === null) return;
+    const elapsed = Date.now() - startedAtRef.current;
+    if (elapsed < 900) {
+      window.setTimeout(finish, 900 - elapsed);
+      return;
+    }
+    finishedRef.current = true;
+    onDoneRef.current();
+  };
+
+  useEffect(() => {
+    // Some browsers can emit `ended` immediately when the source failed to
+    // decode. Never let that event skip the scene before playback really ran.
+    const fallback = window.setTimeout(() => {
+      if (finishedRef.current) return;
+      finishedRef.current = true;
+      onDoneRef.current();
+    }, 10000);
     const video = videoRef.current;
-    if (video) { video.muted = !soundEnabled; void video.play().catch(() => { video.muted = true; setMuted(true); setBlocked(soundEnabled); void video.play(); }); }
+    if (video) {
+      video.muted = !soundEnabled;
+      void video.play().then(markStarted).catch(() => {
+        video.muted = true;
+        setMuted(true);
+        setBlocked(soundEnabled);
+        void video.play().then(markStarted).catch(() => setBlocked(true));
+      });
+    }
     return () => window.clearTimeout(fallback);
-  }, [onDone, soundEnabled]);
+  }, [soundEnabled]);
   function toggleSound() {
     const video = videoRef.current;
     if (!video) return;
@@ -1101,7 +1138,7 @@ function FinalIntroVideo({ soundEnabled, onDone }: { soundEnabled: boolean; onDo
     setMuted(next);
     if (!next) void video.play().then(() => setBlocked(false)).catch(() => { video.muted = true; setMuted(true); setBlocked(true); });
   }
-  return <div className="vader-scene static-vader-scene final-intro-video"><video ref={videoRef} className="vader-video" autoPlay muted={muted} playsInline preload="auto" onEnded={onDone}><source src="/unkan.mp4" type="video/mp4" /></video><div className="vader-progress"><div className="vader-progress-track"><span /></div><div className="vader-progress-steps"><span className="done">✓ FİKİR</span><span className="done">✓ GÜN</span><span className="done">✓ SAAT</span><span className="active">ORGANİZATÖR SEÇİLİYOR...</span></div></div><button type="button" className="vader-sound-button" onClick={toggleSound}>{muted ? "🔇 SESİ AÇ" : "🔊 SESİ KAPAT"}</button>{blocked ? <span className="vader-sound-hint">Tarayıcı otomatik sesi engelledi. Açmak için dokun.</span> : null}</div>;
+  return <div className="vader-scene static-vader-scene final-intro-video"><video ref={videoRef} className="vader-video" autoPlay muted={muted} playsInline preload="auto" onPlay={markStarted} onEnded={finish} onError={() => setBlocked(true)}><source src="/unkan.mp4" type="video/mp4" /></video><div className="vader-progress"><div className="vader-progress-track"><span /></div><div className="vader-progress-steps"><span className="done">✓ FİKİR</span><span className="done">✓ GÜN</span><span className="done">✓ SAAT</span><span className="active">ORGANİZATÖR SEÇİLİYOR...</span></div></div><button type="button" className="vader-sound-button" onClick={toggleSound}>{muted ? "🔇 SESİ AÇ" : "🔊 SESİ KAPAT"}</button>{blocked ? <span className="vader-sound-hint">Video veya ses otomatik başlatılamadı. Sahne kısa süre içinde devam edecek.</span> : null}</div>;
 }
 
 function PlaceResultStage({ event, soundEnabled, meta, onReact }: { event: EventData; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void }) {
