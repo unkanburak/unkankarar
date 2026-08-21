@@ -15,6 +15,8 @@ type SoundEffect = "card" | "vote" | "eliminate" | "roulette" | "lock";
 type CancellationNotice = { id: string; message: string; cancelledAt: string };
 type EventMeta = { acknowledged: string[]; reactions: Record<string, string> };
 
+let uiAudioContext: AudioContext | null = null;
+
 type Idea = { id: string; text: string; authorId: string };
 type Schedule = {
   availability: Record<string, string[]>;
@@ -201,7 +203,9 @@ function playUiSound(effect: SoundEffect, enabled: boolean) {
   if (!enabled || typeof window === "undefined") return;
   const AudioContextClass = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) return;
-  const context = new AudioContextClass();
+  uiAudioContext ??= new AudioContextClass();
+  const context = uiAudioContext;
+  if (context.state === "suspended") void context.resume();
   const profiles: Record<SoundEffect, Array<[number, number, number, OscillatorType, number]>> = {
     card: [[0, 190, .07, "triangle", .055], [.045, 120, .08, "sine", .035]],
     vote: [[0, 420, .045, "sine", .04], [.04, 610, .055, "triangle", .035]],
@@ -224,7 +228,6 @@ function playUiSound(effect: SoundEffect, enabled: boolean) {
     oscillator.stop(now + delay + duration + .01);
   }
   if (navigator.vibrate) navigator.vibrate(effect === "lock" ? 16 : 8);
-  window.setTimeout(() => void context.close(), 550);
 }
 
 function getOptionList(event: EventData) {
@@ -270,6 +273,9 @@ export default function UnkanApp() {
   const [eventMeta, setEventMeta] = useState<EventMeta>({ acknowledged: [], reactions: {} });
   const seenCancellationId = useRef<string | null>(null);
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const lastSaveRef = useRef<{ fingerprint: string; at: number } | null>(null);
+  const metaWriteRef = useRef(0);
+  const cancelInFlightRef = useRef(false);
   const localRevisionRef = useRef(0);
   const reducedMotion = useReducedMotion();
 
@@ -282,15 +288,27 @@ export default function UnkanApp() {
       try {
         const parsed = JSON.parse(saved) as EventData;
         setEvent(parsed);
+        localRevisionRef.current = parsed.updatedAt ?? 0;
         setPhase(parsed.phase === "final" ? "home" : parsed.phase);
       } catch { window.localStorage.removeItem(CURRENT_EVENT_KEY); }
     }
+    const applyRemoteEvent = (parsed: EventData) => {
+      const remoteRevision = parsed.updatedAt ?? 0;
+      if (remoteRevision && localRevisionRef.current > remoteRevision) return false;
+      localRevisionRef.current = Math.max(localRevisionRef.current, remoteRevision);
+      setEvent((current) => {
+        if (current?.id === parsed.id && current.updatedAt && remoteRevision && remoteRevision < current.updatedAt) return current;
+        return current && JSON.stringify(current) === JSON.stringify(parsed) ? current : parsed;
+      });
+      setPhase((current) => current === "home" || current === "create" ? current : (parsed.phase === "final" ? "final" : parsed.phase));
+      const serialized = JSON.stringify(parsed);
+      if (window.localStorage.getItem(CURRENT_EVENT_KEY) !== serialized) window.localStorage.setItem(CURRENT_EVENT_KEY, serialized);
+      return true;
+    };
     fetch("/api/state").then((response) => response.json()).then((data: { event?: EventData | null; cancellation?: CancellationNotice | null }) => {
       if (data.event) {
         const parsed = data.event;
-        setEvent(parsed);
-        setPhase(parsed.phase === "final" ? "home" : parsed.phase);
-        window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(parsed));
+        applyRemoteEvent(parsed);
       } else {
         setEvent(null);
         setPhase("home");
@@ -305,13 +323,7 @@ export default function UnkanApp() {
       fetch("/api/state").then((response) => response.json()).then((data: { event?: EventData | null; cancellation?: CancellationNotice | null }) => {
         if (data.event) {
           const parsed = data.event;
-          if (parsed.updatedAt) localRevisionRef.current = Math.max(localRevisionRef.current, parsed.updatedAt);
-          setEvent((current) => {
-            if (current?.id === parsed.id && current.updatedAt && (!parsed.updatedAt || parsed.updatedAt < current.updatedAt)) return current;
-            return current && JSON.stringify(current) === JSON.stringify(parsed) ? current : parsed;
-          });
-          setPhase((current) => current === "home" || current === "create" ? current : (parsed.phase === "final" ? "final" : parsed.phase));
-          window.localStorage.setItem(CURRENT_EVENT_KEY, JSON.stringify(parsed));
+          applyRemoteEvent(parsed);
           return;
         }
 
@@ -551,6 +563,11 @@ export default function UnkanApp() {
   }, [event, member?.role, reducedMotion]);
 
   function saveEvent(next: EventData) {
+    const { updatedAt: _ignoredUpdatedAt, ...eventWithoutRevision } = next;
+    const fingerprint = JSON.stringify(eventWithoutRevision);
+    const now = Date.now();
+    if (lastSaveRef.current?.fingerprint === fingerprint && now - lastSaveRef.current.at < 900) return;
+    lastSaveRef.current = { fingerprint, at: now };
     const updatedAt = Math.max(Date.now(), localRevisionRef.current + 1, next.updatedAt ?? 0);
     localRevisionRef.current = updatedAt;
     const savedEvent = { ...next, updatedAt };
@@ -610,22 +627,24 @@ export default function UnkanApp() {
   }
 
   async function cancelTable() {
+    if (cancelInFlightRef.current) return;
+    cancelInFlightRef.current = true;
     setConfirmCancel(false);
-    const response = await fetch("/api/state", {
-      method: "DELETE",
-      credentials: "include",
-      cache: "no-store",
-    });
-    const data = await response.json() as { cancellation?: CancellationNotice; error?: string };
-    if (!response.ok) {
-      showToast(data.error ?? "Masa dağıtılamadı.");
-      return;
+    try {
+      const response = await fetch("/api/state", { method: "DELETE", credentials: "include", cache: "no-store" });
+      const data = await response.json() as { cancellation?: CancellationNotice; error?: string };
+      if (!response.ok) {
+        showToast(data.error ?? "Masa dağıtılamadı.");
+        return;
+      }
+      if (data.cancellation) seenCancellationId.current = data.cancellation.id;
+      setEvent(null);
+      setPhase("home");
+      window.localStorage.removeItem(CURRENT_EVENT_KEY);
+      showToast(data.cancellation?.message ?? "Burak masayı bozdu.");
+    } finally {
+      cancelInFlightRef.current = false;
     }
-    if (data.cancellation) seenCancellationId.current = data.cancellation.id;
-    setEvent(null);
-    setPhase("home");
-    window.localStorage.removeItem(CURRENT_EVENT_KEY);
-    showToast(data.cancellation?.message ?? "Burak masayı bozdu.");
   }
 
   function showToast(message: string) {
@@ -634,6 +653,8 @@ export default function UnkanApp() {
   }
 
   async function updateEventMeta(action: "acknowledge" | "react", reaction?: string) {
+    if (action === "acknowledge" && Date.now() - metaWriteRef.current < 900) return;
+    if (action === "acknowledge") metaWriteRef.current = Date.now();
     try {
       const response = await fetch("/api/event-meta", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, reaction }) });
       const data = await response.json() as EventMeta & { error?: string };
@@ -691,8 +712,8 @@ export default function UnkanApp() {
         {member && event && phase === "voting" ? <VotingStage event={event} member={member} onVote={(selected) => {
           playUiSound("vote", soundEnabled);
           const votes = { ...event.votes, [member.id]: selected };
-          saveEvent({ ...event, votes });
-          if (Object.keys(votes).length >= event.joined.length) saveEvent({ ...event, votes, phase: "result", roundEndsAt: undefined });
+          const complete = Object.keys(votes).length >= event.joined.length;
+          saveEvent({ ...event, votes, phase: complete ? "result" : event.phase, roundEndsAt: complete ? undefined : event.roundEndsAt });
         }} onClose={() => {
           const validVotes = Object.keys(event.votes).length;
           const quorum = Math.floor(Math.max(1, event.joined.length) / 2) + 1;
@@ -934,10 +955,18 @@ function IdeasStage({ event, member, onBack, onSubmit, onReveal, onOpenVoting }:
 function VotingStage({ event, member, onVote, onClose }: { event: EventData; member: Member; onVote: (selected: string[]) => void; onClose: () => void }) {
   const optionList = getOptionList(event);
   const [selected, setSelected] = useState(event.votes[member.id] ?? []);
+  const [submitting, setSubmitting] = useState(false);
   const votedCount = Object.keys(event.votes).length;
   const participants = MEMBERS.filter((person) => event.joined.includes(person.id));
   const threshold = Math.floor(Math.max(1, participants.length) / 2) + 1;
-  return <section className="screen"><div className="screen-head"><div><div className="eyebrow">Round {event.optionSource === "crowd" ? 2 : 1} · gizli approval voting</div><h1 className="screen-title">HANGİLERİNE<br /><span style={{ color: "var(--acid)" }}>OK'SİN?</span></h1><p className="screen-subtitle">Uyanların hepsini seç. Kimin neye bastığı görünmeyecek.</p></div><div className="round-meta"><RoundTimer endsAt={event.roundEndsAt} /><div className="vote-progress">{votedCount} / {participants.length} OY GELDİ.</div></div></div><div className="surface vote-stage"><div className="vote-header"><div><span className="eyebrow">En az {threshold} kabul gerekli</span><h2>{event.prompt}</h2></div><CircleHelp size={20} color="var(--muted)" /></div><div className="vote-grid">{optionList.map((option, index) => <motion.button key={option.id} whileTap={{ scale: .98 }} transition={motionTokens.spring.button} className={`vote-card ${selected.includes(option.id) ? "selected" : ""}`} disabled={Boolean(event.votes[member.id])} onClick={() => setSelected((items) => items.includes(option.id) ? items.filter((id) => id !== option.id) : [...items, option.id])}><span className="card-symbol">0{index + 1}</span><strong>{option.text}</strong><span className="check" /></motion.button>)}</div><div className="voter-row" aria-label="Oy ilerlemesi">{participants.map((person) => <span key={person.id} className={event.votes[person.id] ? "voter joined" : "voter"} title={event.votes[person.id] ? `${person.name} oy verdi` : `${person.name} bekleniyor`}>{event.votes[person.id] ? person.initials : ""}</span>)}</div><div className="vote-footer"><WaitingLine memberIds={event.joined} completedIds={Object.keys(event.votes)} /><div className="action-row"><button className="button primary" disabled={!selected.length || Boolean(event.votes[member.id])} onClick={() => onVote(selected)}>{event.votes[member.id] ? "OYUN GİTTİ" : "OYU GÖNDER"} <Check size={15} /></button>{member.role === "ADMIN" ? <button className="button ghost" onClick={onClose}>OYLAMAYI KAPAT</button> : null}</div></div></div></section>;
+  useEffect(() => { if (event.votes[member.id]) setSubmitting(false); }, [event.votes, member.id]);
+  function submitVote() {
+    if (submitting || !selected.length || event.votes[member.id]) return;
+    setSubmitting(true);
+    onVote(selected);
+    window.setTimeout(() => setSubmitting(false), 2000);
+  }
+  return <section className="screen"><div className="screen-head"><div><div className="eyebrow">Round {event.optionSource === "crowd" ? 2 : 1} · gizli approval voting</div><h1 className="screen-title">HANGİLERİNE<br /><span style={{ color: "var(--acid)" }}>OK'SİN?</span></h1><p className="screen-subtitle">Uyanların hepsini seç. Kimin neye bastığı görünmeyecek.</p></div><div className="round-meta"><RoundTimer endsAt={event.roundEndsAt} /><div className="vote-progress">{votedCount} / {participants.length} OY GELDİ.</div></div></div><div className="surface vote-stage"><div className="vote-header"><div><span className="eyebrow">En az {threshold} kabul gerekli</span><h2>{event.prompt}</h2></div><CircleHelp size={20} color="var(--muted)" /></div><div className="vote-grid">{optionList.map((option, index) => <motion.button key={option.id} whileTap={{ scale: .98 }} transition={motionTokens.spring.button} className={`vote-card ${selected.includes(option.id) ? "selected" : ""}`} disabled={Boolean(event.votes[member.id]) || submitting} onClick={() => setSelected((items) => items.includes(option.id) ? items.filter((id) => id !== option.id) : [...items, option.id])}><span className="card-symbol">0{index + 1}</span><strong>{option.text}</strong><span className="check" /></motion.button>)}</div><div className="voter-row" aria-label="Oy ilerlemesi">{participants.map((person) => <span key={person.id} className={event.votes[person.id] ? "voter joined" : "voter"} title={event.votes[person.id] ? `${person.name} oy verdi` : `${person.name} bekleniyor`}>{event.votes[person.id] ? person.initials : ""}</span>)}</div><div className="vote-footer"><WaitingLine memberIds={event.joined} completedIds={Object.keys(event.votes)} /><div className="action-row"><button className="button primary" disabled={!selected.length || Boolean(event.votes[member.id]) || submitting} onClick={submitVote}>{event.votes[member.id] || submitting ? "OYUN GİDİYOR…" : "OYU GÖNDER"} <Check size={15} /></button>{member.role === "ADMIN" ? <button className="button ghost" onClick={onClose}>OYLAMAYI KAPAT</button> : null}</div></div></div></section>;
 }
 
 function ResultStage({ event, reducedMotion, soundEnabled, meta, onReact }: { event: EventData; reducedMotion: boolean; soundEnabled: boolean; meta: EventMeta; onReact: (reaction: string) => void }) {
