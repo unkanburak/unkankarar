@@ -280,9 +280,10 @@ export default function UnkanApp() {
   const reducedMotion = useReducedMotion();
 
   useEffect(() => {
+    let active = true;
     const savedSoundSetting = window.localStorage.getItem(SOUND_SETTING_KEY);
     setSoundEnabled(savedSoundSetting === null ? true : savedSoundSetting === "true");
-    fetch("/api/me", { credentials: "include", cache: "no-store" }).then((response) => response.json()).then((data) => setMember(data.member));
+    fetch("/api/me", { credentials: "include", cache: "no-store" }).then((response) => response.json()).then((data) => { if (active) setMember(data.member); });
     const saved = window.localStorage.getItem(CURRENT_EVENT_KEY);
     if (saved) {
       try {
@@ -293,6 +294,7 @@ export default function UnkanApp() {
       } catch { window.localStorage.removeItem(CURRENT_EVENT_KEY); }
     }
     const applyRemoteEvent = (parsed: EventData) => {
+      if (!active) return false;
       const remoteRevision = parsed.updatedAt ?? 0;
       if (remoteRevision && localRevisionRef.current > remoteRevision) return false;
       localRevisionRef.current = Math.max(localRevisionRef.current, remoteRevision);
@@ -306,6 +308,7 @@ export default function UnkanApp() {
       return true;
     };
     fetch("/api/state").then((response) => response.json()).then((data: { event?: EventData | null; cancellation?: CancellationNotice | null }) => {
+      if (!active) return;
       if (data.event) {
         const parsed = data.event;
         applyRemoteEvent(parsed);
@@ -318,15 +321,18 @@ export default function UnkanApp() {
           showToast(data.cancellation.message);
         }
       }
-    }).catch(() => { /* local fallback remains available when the demo server is unavailable */ }).finally(() => setHydrated(true));
+    }).catch(() => { /* local fallback remains available when the demo server is unavailable */ }).finally(() => { if (active) setHydrated(true); });
     const sync = () => {
+      if (!active) return;
       fetch("/api/state").then((response) => response.json()).then((data: { event?: EventData | null; cancellation?: CancellationNotice | null }) => {
+        if (!active) return;
         if (data.event) {
           const parsed = data.event;
           applyRemoteEvent(parsed);
           return;
         }
 
+        if (localRevisionRef.current && !data.cancellation) return;
         const isNewCancellation = Boolean(data.cancellation?.id && data.cancellation.id !== seenCancellationId.current);
         if (data.cancellation?.id) seenCancellationId.current = data.cancellation.id;
         setEvent(null);
@@ -343,7 +349,7 @@ export default function UnkanApp() {
     };
     window.addEventListener("storage", sync);
     const interval = window.setInterval(sync, 1000);
-    return () => { window.removeEventListener("storage", sync); window.clearInterval(interval); };
+    return () => { active = false; window.removeEventListener("storage", sync); window.clearInterval(interval); };
   }, []);
 
   useEffect(() => {
@@ -582,6 +588,8 @@ export default function UnkanApp() {
           const response = await fetch("/api/state", { credentials: "include", cache: "no-store" });
           const data = await response.json() as { event?: EventData | null };
           if (!data.event) return;
+          if (localRevisionRef.current !== savedEvent.updatedAt) return;
+          if (data.event.updatedAt && savedEvent.updatedAt && data.event.updatedAt < savedEvent.updatedAt) return;
           localRevisionRef.current = Math.max(localRevisionRef.current, data.event.updatedAt ?? 0);
           setEvent(data.event);
           setPhase(data.event.phase);
