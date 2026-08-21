@@ -393,6 +393,7 @@ button:disabled { cursor: not-allowed; }
 .reaction-button small { color: var(--acid); font-family: 'DM Mono', monospace; }
 .reaction-emoji { font-size: 21px; line-height: 1; }
 .vader-scene { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; align-content: center; gap: 20px; text-align: center; background: radial-gradient(circle, rgba(198,243,107,.11), transparent 45%), rgba(5,7,6,.5); }
+.vader-video { width: min(100%, 720px); max-height: 70%; object-fit: contain; border-radius: 16px; display: block; }
 .vader-helmet { position: relative; width: 138px; height: 116px; display: grid; place-items: center; border: 2px solid rgba(198,243,107,.72); border-radius: 48% 48% 24% 24%; background: linear-gradient(145deg, #252b28, #070908 72%); box-shadow: 0 0 34px rgba(198,243,107,.18), inset 0 -18px 20px rgba(0,0,0,.8); clip-path: polygon(18% 0, 82% 0, 100% 68%, 76% 100%, 24% 100%, 0 68%); }
 .vader-helmet span { position: relative; z-index: 2; color: var(--acid); font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 700; letter-spacing: .18em; transform: translateY(-5px); }
 .vader-helmet i, .vader-helmet b { position: absolute; bottom: 20px; width: 18px; height: 7px; background: var(--acid); opacity: .7; }
